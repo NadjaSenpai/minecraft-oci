@@ -55,7 +55,7 @@ sudo systemctl status  minecraft     # 状態確認
 sudo systemctl restart minecraft     # 再起動
 sudo systemctl stop    minecraft     # 停止(正常終了: コンソールに stop を送り保存)
 
-sudo mc-console                      # tmux コンソールにアタッチ(デタッチ: Ctrl-b → d)
+sudo mc-console                      # コンソールにアタッチ(停止中なら起動してから。デタッチ: Ctrl-b → d)
 ```
 
 サーバーコマンド(`whitelist add <名前>`、`op <名前>` など)は `mc-console` で接続して入力します。ログは `/opt/minecraft/logs/latest.log`。
@@ -86,7 +86,7 @@ OCI コンソール → ネットワーキング → VCN → サブネット →
 |---|---|
 | `setup.sh` | 構築本体 |
 | `update.sh` | Paper / プラグインの最新化 |
-| `mc-console` | tmux コンソールアタッチヘルパー(`/usr/local/bin` に自動配置) |
+| `mc-console` | コンソールアタッチ + 停止中なら起動するヘルパー(`/usr/local/bin` に自動配置) |
 
 ## ライセンス
 
