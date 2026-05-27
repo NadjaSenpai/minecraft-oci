@@ -30,6 +30,19 @@ _ADMIN_SET="${ADMIN_PLAYER+x}"
 _BEDROCK_SET="${BEDROCK_PLAYER+x}"
 _MEMORY_SET="${MEMORY+x}"
 
+# ゲームプレイ9項目: env で渡されたかを _SET フラグに記録 (デフォルト適用前に)。
+# これらは「未設定なら server.properties に書かない」方針 (Minecraft 既定に任せる)。
+# 既定値は適用しない (= 空のまま)。管理キー (white-list/online-mode/server-port) は別途強制。
+_LEVEL_SEED_SET="${LEVEL_SEED+x}"
+_MOTD_SET="${MOTD+x}"
+_DIFFICULTY_SET="${DIFFICULTY+x}"
+_GAMEMODE_SET="${GAMEMODE+x}"
+_MAX_PLAYERS_SET="${MAX_PLAYERS+x}"
+_PVP_SET="${PVP+x}"
+_VIEW_DISTANCE_SET="${VIEW_DISTANCE+x}"
+_SIMULATION_DISTANCE_SET="${SIMULATION_DISTANCE+x}"
+_HARDCORE_SET="${HARDCORE+x}"
+
 MC_VERSION="${MC_VERSION:-26.1.2}"
 ADMIN_PLAYER="${ADMIN_PLAYER:-}"
 BEDROCK_PLAYER="${BEDROCK_PLAYER:-}"
@@ -38,6 +51,17 @@ MC_USER="${MC_USER:-minecraft}"
 MC_DIR="${MC_DIR:-/opt/minecraft}"
 JAVA_PORT="${JAVA_PORT:-25565}"
 BEDROCK_PORT="${BEDROCK_PORT:-19132}"
+
+# ゲームプレイ9項目: 既定は空 (= 未設定なら書かない)。Minecraft 既定値は適用しない。
+LEVEL_SEED="${LEVEL_SEED:-}"
+MOTD="${MOTD:-}"
+DIFFICULTY="${DIFFICULTY:-}"
+GAMEMODE="${GAMEMODE:-}"
+MAX_PLAYERS="${MAX_PLAYERS:-}"
+PVP="${PVP:-}"
+VIEW_DISTANCE="${VIEW_DISTANCE:-}"
+SIMULATION_DISTANCE="${SIMULATION_DISTANCE:-}"
+HARDCORE="${HARDCORE:-}"
 TMUX_SOCKET="minecraft"
 TMUX_SESSION="minecraft"
 SERVICE_NAME="minecraft"
@@ -55,6 +79,87 @@ log()  { printf '  \033[1;32m•\033[0m %s\n' "$*"; }
 ok()   { printf '  \033[1;32m✓\033[0m %s\n' "$*"; }
 warn() { printf '  \033[1;33m! %s\033[0m\n' "$*" >&2; }
 die()  { printf '\n\033[1;31m✗ ERROR: %s\033[0m\n' "$*" >&2; exit 1; }
+
+# --- 設定値バリデーション (env 由来の値はデフォルト適用直後に検証する) -------------
+# Phase 0-B: server.properties は不正値を既定にリセットするため、書く前に検証必須。
+
+valid_enum() {  # valid_enum <value> <allowed...(空白区切り)>  -> 一致すれば真
+  local v=$1; shift
+  local a
+  for a in $*; do [ "$v" = "$a" ] && return 0; done
+  return 1
+}
+
+valid_int_range() {  # valid_int_range <value> <min> <max>  -> 整数かつ範囲内なら真
+  local v=$1 min=$2 max=$3
+  case "$v" in ''|*[!0-9-]*) return 1;; esac   # 数字 (と先頭の符号) 以外を含む
+  case "$v" in -*) ;; *[!0-9]*) return 1;; esac
+  [ "$v" -ge "$min" ] && [ "$v" -le "$max" ]
+}
+
+valid_bool() {  # valid_bool <value>  -> true/false なら真
+  case "$1" in true|false) return 0;; *) return 1;; esac
+}
+
+# motd を server.properties 用に正規化する。Phase 0-D: properties には生 § ではなく
+# Java エスケープの § を書く。プラグイン慣習の & カラーコードは § へ変換する。
+normalize_motd() {  # normalize_motd <value>  -> 変換後の文字列を stdout へ
+  printf '%s' "${1//&/\\u00A7}"
+}
+
+# MC_VERSION がモダン (1.21.9 以上、または年次版でメジャー > 21) かを判定する。
+# Phase 0-E: pvp は 1.21.9+/26.x ではゲームルール、≤1.21.8 では server.properties キー。
+# Minecraft のバージョン体系は2系統: クラシック "1.21.9" (先頭=1) と年次版 "26.1.2" (先頭>21)。
+is_modern_mc() {  # is_modern_mc  -> モダンなら真
+  local ver="${MC_VERSION:-}" major minor patch rest
+  major="${ver%%.*}"
+  case "$major" in ''|*[!0-9]*) return 1;; esac
+  # 先頭コンポーネント > 21 = 22/26 などの年次版 → モダン
+  [ "$major" -gt 21 ] && return 0
+  # 先頭 == 1 = クラシック系。minor.patch を 1.21.9 と比較
+  if [ "$major" -eq 1 ]; then
+    rest="${ver#*.}"               # "21.9" -> minor
+    minor="${rest%%.*}"
+    case "$minor" in ''|*[!0-9]*) minor=0;; esac
+    [ "$minor" -gt 21 ] && return 0
+    if [ "$minor" -eq 21 ]; then
+      patch="${rest#*.}"           # "9" / "9.x" などの後続
+      patch="${patch%%.*}"
+      [ "$patch" = "$rest" ] && patch=0   # "1.21" のように patch 無し
+      case "$patch" in ''|*[!0-9]*) patch=0;; esac
+      [ "$patch" -ge 9 ] && return 0
+    fi
+  fi
+  return 1
+}
+
+# env 由来のゲームプレイ設定値を検証 (空 = 未設定はスキップ)。不正なら die。
+if [ -n "$DIFFICULTY" ]; then
+  valid_enum "$DIFFICULTY" "peaceful easy normal hard" \
+    || die "DIFFICULTY が不正です: '$DIFFICULTY' (有効値: peaceful easy normal hard)"
+fi
+if [ -n "$GAMEMODE" ]; then
+  valid_enum "$GAMEMODE" "survival creative adventure spectator" \
+    || die "GAMEMODE が不正です: '$GAMEMODE' (有効値: survival creative adventure spectator)"
+fi
+if [ -n "$MAX_PLAYERS" ]; then
+  valid_int_range "$MAX_PLAYERS" 0 2147483647 \
+    || die "MAX_PLAYERS が不正です: '$MAX_PLAYERS' (0 以上の整数)"
+fi
+if [ -n "$VIEW_DISTANCE" ]; then
+  valid_int_range "$VIEW_DISTANCE" 3 32 \
+    || die "VIEW_DISTANCE が不正です: '$VIEW_DISTANCE' (3〜32 の整数)"
+fi
+if [ -n "$SIMULATION_DISTANCE" ]; then
+  valid_int_range "$SIMULATION_DISTANCE" 3 32 \
+    || die "SIMULATION_DISTANCE が不正です: '$SIMULATION_DISTANCE' (3〜32 の整数)"
+fi
+if [ -n "$PVP" ]; then
+  valid_bool "$PVP" || die "PVP が不正です: '$PVP' (true または false)"
+fi
+if [ -n "$HARDCORE" ]; then
+  valid_bool "$HARDCORE" || die "HARDCORE が不正です: '$HARDCORE' (true または false)"
+fi
 
 run_as_mc() { sudo -u "$MC_USER" bash -c "$1"; }
 
@@ -302,11 +407,63 @@ chown "$MC_USER":"$MC_USER" "$MC_DIR/run.sh"
 ok "run.sh を生成 (Xms=Xmx=${MEMORY_GB}G, Aikar's Flags)"
 
 # ---------------------------------------------------------------------------
-# 9. ブートストラップ起動 → 設定パッチ (初回のみ)
+# 9. 設定の先行書込 → ブートストラップ起動 → Geyser パッチ (初回のみ)
 # ---------------------------------------------------------------------------
 step "初回ブートストラップ & 設定パッチ"
 GEYSER_CFG="$MC_DIR/plugins/Geyser-Spigot/config.yml"
+
+# server.properties に key=val を upsert する (既存値は置換、無ければ追記)。
+# boot 前の先行書込と boot 後のパッチ双方で使うため、ループの外で定義する。
+set_prop() {
+  local file=$1 key=$2 val=$3
+  if grep -q "^${key}=" "$file"; then
+    sed -i "s|^${key}=.*|${key}=${val}|" "$file"
+  else
+    echo "${key}=${val}" >> "$file"
+  fi
+}
+
 if [ ! -f "$GEYSER_CFG" ] || [ ! -f "$MC_DIR/server.properties" ]; then
+  # Phase 0-A: level-seed は world 生成時のみ有効 (生成後は world に焼き込まれ変更不可)。
+  # Phase 0-B: Minecraft は server.properties の既存値を保持し欠落キーのみ既定で埋める。
+  # → 初回 boot の前に server.properties を先行作成しておけば seed や生成時設定が確実に効く。
+  if [ ! -f "$MC_DIR/server.properties" ]; then
+    log "初回 boot 前に server.properties を先行作成 (seed / 生成時設定を確実に反映)..."
+    : > "$MC_DIR/server.properties"
+
+    # 管理キー (常に強制): crossplay 保護のため固定。
+    set_prop "$MC_DIR/server.properties" white-list true
+    set_prop "$MC_DIR/server.properties" online-mode true
+    set_prop "$MC_DIR/server.properties" server-port "$JAVA_PORT"
+
+    # level-seed: world ディレクトリが無いときだけ書く。既存 world では無視 (警告)。
+    if [ -n "$LEVEL_SEED" ]; then
+      if [ -d "$MC_DIR/world" ]; then
+        warn "既存の world があるため LEVEL_SEED='$LEVEL_SEED' は無視されます (seed は生成時のみ有効)。"
+      else
+        set_prop "$MC_DIR/server.properties" level-seed "$LEVEL_SEED"
+      fi
+    fi
+
+    # ユーザー指定のファイル backed キー (空 = 未指定なら書かない = Minecraft 既定に任せる)。
+    [ -n "$MOTD" ]                && set_prop "$MC_DIR/server.properties" motd "$(normalize_motd "$MOTD")"
+    [ -n "$DIFFICULTY" ]          && set_prop "$MC_DIR/server.properties" difficulty "$DIFFICULTY"
+    [ -n "$GAMEMODE" ]            && set_prop "$MC_DIR/server.properties" gamemode "$GAMEMODE"
+    [ -n "$MAX_PLAYERS" ]         && set_prop "$MC_DIR/server.properties" max-players "$MAX_PLAYERS"
+    [ -n "$VIEW_DISTANCE" ]       && set_prop "$MC_DIR/server.properties" view-distance "$VIEW_DISTANCE"
+    [ -n "$SIMULATION_DISTANCE" ] && set_prop "$MC_DIR/server.properties" simulation-distance "$SIMULATION_DISTANCE"
+    [ -n "$HARDCORE" ]            && set_prop "$MC_DIR/server.properties" hardcore "$HARDCORE"
+
+    # pvp: Phase 0-E。モダン (1.21.9+/26.x) はゲームルールなので boot 後にコンソール送出する。
+    # レガシー (≤1.21.8) のみ server.properties キーとして先行書込する。
+    if [ -n "$PVP" ] && ! is_modern_mc; then
+      set_prop "$MC_DIR/server.properties" pvp "$PVP"
+    fi
+
+    chown "$MC_USER":"$MC_USER" "$MC_DIR/server.properties"
+    ok "server.properties を先行作成 (管理キー + 指定済み生成時設定)"
+  fi
+
   log "サーバーを一度起動して設定ファイルを生成します (ワールド生成のため数分かかります)..."
   BOOT_LOG="$MC_DIR/bootstrap.log"
   run_as_mc "cd '$MC_DIR' && printf 'stop\n' | timeout 600 '$JAVA_BIN' -Xms1G -Xmx2G -jar paper.jar --nogui > '$BOOT_LOG' 2>&1" &
@@ -318,15 +475,8 @@ if [ ! -f "$GEYSER_CFG" ] || [ ! -f "$MC_DIR/server.properties" ]; then
   [ -f "$MC_DIR/server.properties" ] || die "ブートストラップで server.properties が生成されませんでした。ログを確認してください: $MC_DIR/logs/latest.log"
   ok "設定ファイル生成完了"
 
+  # boot 後: 念のため管理キーを再確認 (先行書込が効いていれば no-op)。
   log "設定をパッチ: white-list=true / online-mode=true / auth-type=floodgate"
-  set_prop() {
-    local file=$1 key=$2 val=$3
-    if grep -q "^${key}=" "$file"; then
-      sed -i "s|^${key}=.*|${key}=${val}|" "$file"
-    else
-      echo "${key}=${val}" >> "$file"
-    fi
-  }
   set_prop "$MC_DIR/server.properties" white-list true
   set_prop "$MC_DIR/server.properties" online-mode true
   set_prop "$MC_DIR/server.properties" server-port "$JAVA_PORT"
@@ -439,6 +589,18 @@ if wait_progress "$MC_DIR/logs/latest.log" "" 'Done ('; then
   ok "サーバー起動完了"
 else
   warn "起動完了を確認できませんでした。ログを確認してください: $MC_DIR/logs/latest.log"
+fi
+
+# pvp: Phase 0-E。モダン (1.21.9+/26.x) では pvp は server.properties キーではなく
+# ゲームルールなので、起動完了後にコンソールへ /gamerule pvp を送って world に永続化する。
+# (レガシー版は step 9 で server.properties に先行書込済みのため、ここでは何もしない)
+if [ -n "$PVP" ] && is_modern_mc; then
+  if sudo -u "$MC_USER" tmux -L "$TMUX_SOCKET" has-session -t "$TMUX_SESSION" 2>/dev/null; then
+    sudo -u "$MC_USER" tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" "gamerule pvp $PVP" Enter
+    ok "ゲームルール pvp=$PVP を送信 (モダン版・world 永続)"
+  else
+    warn "サーバーが未起動のため pvp=$PVP を設定できませんでした。起動後に mc-console で 'gamerule pvp $PVP' を実行してください。"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
