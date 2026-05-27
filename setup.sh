@@ -137,11 +137,14 @@ fi
 # 4. 専用ユーザーとディレクトリ
 # ---------------------------------------------------------------------------
 step "専用ユーザーとディレクトリ"
+# tmux はペイン起動にユーザーのログインシェルを使うため、サービス用ユーザーにも
+# 有効なシェルが必要。nologin だと new-session が即終了し起動に失敗する。
 if ! id "$MC_USER" >/dev/null 2>&1; then
-  useradd --system --create-home --home-dir "$MC_DIR" --shell /usr/sbin/nologin "$MC_USER"
-  ok "システムユーザー $MC_USER を作成"
+  useradd --system --create-home --home-dir "$MC_DIR" --shell /bin/bash "$MC_USER"
+  ok "システムユーザー $MC_USER を作成 (shell: /bin/bash)"
 else
-  ok "ユーザー $MC_USER は既存"
+  usermod --shell /bin/bash "$MC_USER"
+  ok "ユーザー $MC_USER は既存 (shell を /bin/bash に補正)"
 fi
 install -d -o "$MC_USER" -g "$MC_USER" -m 0755 "$MC_DIR" "$MC_DIR/plugins"
 ok "ディレクトリ: $MC_DIR (plugins/ 含む)"
