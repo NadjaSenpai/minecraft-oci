@@ -19,6 +19,17 @@
 #   MC_DIR        サーバーディレクトリ             (既定: /opt/minecraft)
 #   JAVA_PORT     Java版ポート                     (既定: 25565)
 #   BEDROCK_PORT  Bedrock版(Geyser)ポート          (既定: 19132)
+#
+# ゲームプレイ設定 (未指定なら書かず Minecraft 既定に従う。対話では「詳細設定」ゲート内で尋ねる):
+#   LEVEL_SEED    ワールドのシード値               (既定: 空=ランダム。world 生成時のみ有効・後変更不可)
+#   MOTD          サーバー一覧の説明文             (既定: A Minecraft Server。& カラーコード可)
+#   DIFFICULTY    難易度                           (既定: easy。peaceful/easy/normal/hard)
+#   GAMEMODE      既定ゲームモード                 (既定: survival。survival/creative/adventure/spectator)
+#   MAX_PLAYERS   最大同時接続人数                 (既定: 20。0 以上の整数)
+#   PVP           プレイヤー間戦闘                 (既定: true。1.21.9+/26.x ではゲームルール、以前は server.properties)
+#   VIEW_DISTANCE 描画距離(チャンク)               (既定: 10。3〜32)
+#   SIMULATION_DISTANCE シミュレーション距離(チャンク) (既定: 10。3〜32)
+#   HARDCORE      ハードコアモード                 (既定: false。true/false)
 
 set -euo pipefail
 
@@ -223,11 +234,44 @@ if [ -t 0 ] && [ -e /dev/tty ]; then
     IFS= read -r a </dev/tty || a=""
     if [ -n "$a" ]; then printf '%s' "$a"; else printf '%s' "${2:-}"; fi
   }
+  # _ask_valid <質問> <既定値> <バリデータ関数> <バリデータ引数...>
+  # バリデータが通るまで再入力を促す。空入力 (= 既定値も空) はスキップとして許容する。
+  # 検証は対話入力のみが対象 (env 由来値は Phase 1 で前段検証済み)。
+  _ask_valid() {
+    local q=$1 def=$2 fn=$3; shift 3
+    local ans
+    while :; do
+      ans="$(_ask "$q" "$def")"
+      [ -z "$ans" ] && { printf '%s' ""; return 0; }   # 空 = 未設定のまま (スキップ)
+      if "$fn" "$ans" "$@"; then printf '%s' "$ans"; return 0; fi
+      printf '  \033[1;33m! 入力が不正です: %s\033[0m\n' "$ans" >/dev/tty
+    done
+  }
   printf '\n  \033[1m=== 対話設定 (そのまま Enter で既定値) ===\033[0m\n' >/dev/tty
   if [ -z "$_MC_VERSION_SET" ]; then MC_VERSION="$(_ask 'Minecraft バージョン' "$MC_VERSION")"; fi
   if [ -z "$_ADMIN_SET" ];      then ADMIN_PLAYER="$(_ask 'Java版 管理者名 (whitelist+op、空=なし)' "$ADMIN_PLAYER")"; fi
   if [ -z "$_BEDROCK_SET" ];    then BEDROCK_PLAYER="$(_ask 'Bedrock版 管理者ゲーマータグ (whitelist+op、空=なし)' "$BEDROCK_PLAYER")"; fi
   if [ -z "$_MEMORY_SET" ];     then MEMORY="$(_ask 'ヒープGB (空=総RAMの約75%を自動)' '')"; fi
+
+  # level-seed: 後変更不可 (world 生成時のみ有効) なので、env 未指定 かつ world 未生成のときは常に尋ねる。
+  if [ -z "$_LEVEL_SEED_SET" ] && [ ! -d "$MC_DIR/world" ]; then
+    LEVEL_SEED="$(_ask 'ワールドのシード値 (空=ランダム)' "$LEVEL_SEED")"
+  fi
+
+  # 詳細設定ゲート: y のときだけ未指定 (env 未設定) の 8 項目を尋ねる。
+  _detail="$(_ask '詳細設定をカスタマイズしますか? [y/N]' 'N')"
+  case "$_detail" in
+    y|Y|yes|Yes|YES)
+      if [ -z "$_MOTD_SET" ];       then MOTD="$(_ask 'サーバーの説明文 motd (& でカラーコード可、既定: A Minecraft Server)' "$MOTD")"; fi
+      if [ -z "$_DIFFICULTY_SET" ]; then DIFFICULTY="$(_ask_valid '難易度 peaceful/easy/normal/hard (既定: easy)' "$DIFFICULTY" valid_enum 'peaceful easy normal hard')"; fi
+      if [ -z "$_GAMEMODE_SET" ];   then GAMEMODE="$(_ask_valid 'ゲームモード survival/creative/adventure/spectator (既定: survival)' "$GAMEMODE" valid_enum 'survival creative adventure spectator')"; fi
+      if [ -z "$_MAX_PLAYERS_SET" ]; then MAX_PLAYERS="$(_ask_valid '最大同時接続人数 0以上の整数 (既定: 20)' "$MAX_PLAYERS" valid_int_range 0 2147483647)"; fi
+      if [ -z "$_PVP_SET" ];        then PVP="$(_ask_valid 'プレイヤー間戦闘 pvp true/false (既定: true)' "$PVP" valid_bool)"; fi
+      if [ -z "$_VIEW_DISTANCE_SET" ]; then VIEW_DISTANCE="$(_ask_valid '描画距離 (チャンク) 3〜32 (既定: 10)' "$VIEW_DISTANCE" valid_int_range 3 32)"; fi
+      if [ -z "$_SIMULATION_DISTANCE_SET" ]; then SIMULATION_DISTANCE="$(_ask_valid 'シミュレーション距離 (チャンク) 3〜32 (既定: 10)' "$SIMULATION_DISTANCE" valid_int_range 3 32)"; fi
+      if [ -z "$_HARDCORE_SET" ];   then HARDCORE="$(_ask_valid 'ハードコアモード true/false (既定: false)' "$HARDCORE" valid_bool)"; fi
+      ;;
+  esac
   printf '\n' >/dev/tty
 fi
 
@@ -248,6 +292,15 @@ if [ "$ACCEPT_EULA" != "true" ]; then
 fi
 ok "Minecraft EULA に同意 (https://aka.ms/MinecraftEULA)"
 log "設定: MC=$MC_VERSION / Java=${ADMIN_PLAYER:-(なし)} / Bedrock=${BEDROCK_PLAYER:-(なし)} / MEM=${MEMORY:-自動} / DIR=$MC_DIR"
+# ゲームプレイの主要選択を、設定されている項目だけ簡潔に表示する。
+_summary=""
+[ -n "$LEVEL_SEED" ]  && _summary="${_summary} seed=$LEVEL_SEED"
+[ -n "$DIFFICULTY" ]  && _summary="${_summary} difficulty=$DIFFICULTY"
+[ -n "$GAMEMODE" ]    && _summary="${_summary} gamemode=$GAMEMODE"
+[ -n "$MAX_PLAYERS" ] && _summary="${_summary} max-players=$MAX_PLAYERS"
+[ -n "$PVP" ]         && _summary="${_summary} pvp=$PVP"
+[ -n "$HARDCORE" ]    && _summary="${_summary} hardcore=$HARDCORE"
+[ -n "$_summary" ] && log "ゲームプレイ:${_summary}"
 
 # ---------------------------------------------------------------------------
 # 2. 依存パッケージ
