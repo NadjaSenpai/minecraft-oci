@@ -22,19 +22,22 @@ OCI Always Free の ARM インスタンス上に、**PaperMC + GeyserMC/Floodgat
 
 ## クイックスタート
 
-3 ファイル(`setup.sh` / `update.sh` / `mc-console`)を VM 上の同じディレクトリに置いて実行します。
+リポジトリのファイルを VM 上の同じディレクトリに置いて実行します。端末から実行すると **対話形式**で設定(MC バージョン・管理者名・メモリ)を尋ねられます(そのまま Enter で既定値)。
 
 ```bash
-# Java 版のみ
-sudo ADMIN_PLAYER=あなたのJava版ユーザー名 ./setup.sh
+sudo ./setup.sh
+```
 
-# クロスプレイ(Java + Bedrock 両方を whitelist + op)
+環境変数で渡すと、その項目は対話をスキップします(自動化・再実行・パイプ実行向け):
+
+```bash
+# Java + Bedrock 両方を whitelist + op して非対話で構築
 sudo ADMIN_PLAYER=あなたのJava版名 BEDROCK_PLAYER=あなたのBedrockゲーマータグ ./setup.sh
 ```
 
 完了すると Java 版・Bedrock 版の接続先と、後述の **OCI セキュリティリスト** 設定手順が表示されます。
 
-> Bedrock プレイヤーは Mojang プロフィールを持たないため `whitelist add <名前>` では登録できません。`BEDROCK_PLAYER` を使うと XUID から Floodgate UUID を計算して whitelist に追加します。
+> Bedrock プレイヤーは Mojang プロフィールを持たないため `whitelist add <名前>` では登録できません。`BEDROCK_PLAYER`(対話なら「Bedrock版 管理者ゲーマータグ」)を使うと XUID から Floodgate UUID を計算して whitelist に追加します。
 
 ## 設定(環境変数で上書き可)
 

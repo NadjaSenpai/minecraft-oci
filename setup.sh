@@ -5,8 +5,9 @@
 # 対象: OCI Always Free ARM64 / Ubuntu 22.04 LTS・24.04 LTS。VM 上で root (sudo) 実行。
 # 冪等: 再実行可。world と既存の設定ファイルは上書きしない。
 #
-# 設定は環境変数で上書き可能 (例):
-#   ADMIN_PLAYER=YourName sudo -E ./setup.sh
+# 対話実行: 端末から `sudo ./setup.sh` すると、未設定の項目を対話で尋ねます。
+# 環境変数で渡した項目は対話をスキップ (自動化・再実行・パイプ実行向け。例:
+#   sudo ADMIN_PLAYER=YourName ./setup.sh):
 #
 #   MC_VERSION    Minecraft バージョン            (既定: 26.1.2)
 #   ADMIN_PLAYER  whitelist + op する Java 名      (既定: 空 = 登録しない)
@@ -22,6 +23,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# env で値が渡されたかを記録 (デフォルト適用前に。ハイブリッド対話の判定に使う)
+_MC_VERSION_SET="${MC_VERSION+x}"
+_ADMIN_SET="${ADMIN_PLAYER+x}"
+_BEDROCK_SET="${BEDROCK_PLAYER+x}"
+_MEMORY_SET="${MEMORY+x}"
 
 MC_VERSION="${MC_VERSION:-26.1.2}"
 ADMIN_PLAYER="${ADMIN_PLAYER:-}"
@@ -103,6 +110,22 @@ step "事前チェック"
 [ "$(id -u)" -eq 0 ] || die "root で実行してください (sudo ./setup.sh)"
 ok "root 権限を確認"
 
+# 対話プロンプト: env 未設定 かつ 対話端末のときだけ尋ねる (env 指定時・非対話時はスキップ)
+if [ -t 0 ] && [ -e /dev/tty ]; then
+  _ask() {  # _ask <質問> <既定値> -> 回答を stdout へ
+    local a
+    if [ -n "${2:-}" ]; then printf '%s [%s]: ' "$1" "$2" >/dev/tty; else printf '%s: ' "$1" >/dev/tty; fi
+    IFS= read -r a </dev/tty || a=""
+    if [ -n "$a" ]; then printf '%s' "$a"; else printf '%s' "${2:-}"; fi
+  }
+  printf '\n  \033[1m=== 対話設定 (そのまま Enter で既定値) ===\033[0m\n' >/dev/tty
+  if [ -z "$_MC_VERSION_SET" ]; then MC_VERSION="$(_ask 'Minecraft バージョン' "$MC_VERSION")"; fi
+  if [ -z "$_ADMIN_SET" ];      then ADMIN_PLAYER="$(_ask 'Java版 管理者名 (whitelist+op、空=なし)' "$ADMIN_PLAYER")"; fi
+  if [ -z "$_BEDROCK_SET" ];    then BEDROCK_PLAYER="$(_ask 'Bedrock版 管理者ゲーマータグ (whitelist+op、空=なし)' "$BEDROCK_PLAYER")"; fi
+  if [ -z "$_MEMORY_SET" ];     then MEMORY="$(_ask 'ヒープGB (空=総RAMの約75%を自動)' '')"; fi
+  printf '\n' >/dev/tty
+fi
+
 if [ -r /etc/os-release ]; then
   . /etc/os-release
   if [ "${ID:-}" = "ubuntu" ]; then
@@ -119,7 +142,7 @@ if [ "$ACCEPT_EULA" != "true" ]; then
   die "Minecraft EULA 未同意です。ACCEPT_EULA=true を指定すると同意したものとして続行します (https://aka.ms/MinecraftEULA)。"
 fi
 ok "Minecraft EULA に同意 (https://aka.ms/MinecraftEULA)"
-log "設定: MC_VERSION=$MC_VERSION / MC_DIR=$MC_DIR / ADMIN_PLAYER=${ADMIN_PLAYER:-(未指定)}"
+log "設定: MC=$MC_VERSION / Java=${ADMIN_PLAYER:-(なし)} / Bedrock=${BEDROCK_PLAYER:-(なし)} / MEM=${MEMORY:-自動} / DIR=$MC_DIR"
 
 # ---------------------------------------------------------------------------
 # 2. 依存パッケージ
