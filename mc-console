@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+#
+# mc-console — Minecraft サーバーの tmux コンソールにアタッチする。
+# サーバーコマンド (例: whitelist add <名前>, op <名前>, stop) を直接入力できる。
+# デタッチは Ctrl-b → d (stop と打つとサーバーが止まるので注意)。
+#
+# 使い方: sudo mc-console
+
+set -euo pipefail
+
+MC_USER="${MC_USER:-minecraft}"
+TMUX_SOCKET="minecraft"
+TMUX_SESSION="minecraft"
+
+if ! sudo -u "$MC_USER" tmux -L "$TMUX_SOCKET" has-session -t "$TMUX_SESSION" 2>/dev/null; then
+  echo "tmux セッション '$TMUX_SESSION' が見つかりません。サーバーは起動していますか?" >&2
+  echo "  sudo systemctl status minecraft" >&2
+  exit 1
+fi
+
+echo "コンソールにアタッチします。デタッチ: Ctrl-b → d"
+exec sudo -u "$MC_USER" tmux -L "$TMUX_SOCKET" attach -t "$TMUX_SESSION"
