@@ -22,11 +22,15 @@ OCI Always Free の ARM インスタンス上に、**PaperMC + GeyserMC/Floodgat
 
 ## クイックスタート
 
-リポジトリのファイルを VM 上の同じディレクトリに置いて実行します。端末から実行すると **対話形式**で設定(MC バージョン・管理者名・メモリ)を尋ねられます(そのまま Enter で既定値)。
+OCI の VM に SSH し、以下のワンライナーで取得〜起動まで一気に実行できます(git が無ければ導入):
 
 ```bash
-sudo ./setup.sh
+sudo apt-get update && sudo apt-get install -y git && git clone https://github.com/NadjaSenpai/minecraft-oci.git && cd minecraft-oci && sudo ./setup.sh
 ```
+
+端末から実行すると **対話形式**で設定(MC バージョン・管理者名・メモリ)を尋ねられます(そのまま Enter で既定値)。2 回目以降は `cd ~/minecraft-oci && git pull && sudo ./setup.sh`。
+
+> private リポジトリのため、`git clone` には GitHub の認証(PAT 等)が必要です。公開する場合はリポジトリを public にしてください。
 
 環境変数で渡すと、その項目は対話をスキップします(自動化・再実行・パイプ実行向け):
 
