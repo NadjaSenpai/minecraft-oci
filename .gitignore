@@ -16,9 +16,9 @@ Icon?
 .claude-mem/
 .agents/
 .superpowers/
+CLAUDE.md
 CLAUDE.local.md
 GEMINI.md
-AGENTS.md
 .mcp.json
 
 # Logs / runtime artifacts
