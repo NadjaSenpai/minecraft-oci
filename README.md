@@ -79,6 +79,40 @@ sudo ADMIN_PLAYER=あなたのJava版名 BEDROCK_PLAYER=あなたのBedrockゲ�
 sudo MC_VERSION=26.1.2 MEMORY=16 ADMIN_PLAYER=foo ./setup.sh
 ```
 
+### ゲームプレイ設定(初回構築時に投入)
+
+以下の 9 項目も環境変数で渡せます。**未指定なら書き込まず、Minecraft の既定に従います**。
+初回構築後の変更は後述の `mc-config` で行います(`LEVEL_SEED` を除く)。
+
+| 変数 | 既定値 | 有効値 / 範囲 | 説明 |
+|---|---|---|---|
+| `LEVEL_SEED` | (空=ランダム) | 任意の文字列 | ワールドのシード値。**world 生成時のみ有効で、生成後は変更できません**(既存 world があると無視) |
+| `MOTD` | `A Minecraft Server` | 任意の文字列 | サーバー一覧の説明文。`&` のカラーコードを使えます(`§` に変換して書き込み) |
+| `DIFFICULTY` | `easy` | `peaceful` / `easy` / `normal` / `hard` | 難易度 |
+| `GAMEMODE` | `survival` | `survival` / `creative` / `adventure` / `spectator` | 既定ゲームモード |
+| `MAX_PLAYERS` | `20` | 0 以上の整数 | 最大同時接続人数 |
+| `PVP` | `true` | `true` / `false` | プレイヤー間戦闘。**1.21.9 以上 / 26.x(既定の 26.1.2 を含む)ではゲームルール**、1.21.8 以下では `server.properties` キーとして扱います |
+| `VIEW_DISTANCE` | `10` | 3〜32 | 描画距離(チャンク) |
+| `SIMULATION_DISTANCE` | `10` | 3〜32 | シミュレーション距離(チャンク) |
+| `HARDCORE` | `false` | `true` / `false` | ハードコアモード |
+
+例:
+
+```bash
+sudo LEVEL_SEED=12345 DIFFICULTY=hard VIEW_DISTANCE=12 PVP=false ./setup.sh
+```
+
+### 初回構築時の対話
+
+端末から `sudo ./setup.sh` を実行すると、world が未生成のときは **シード値** も尋ねられます
+(`LEVEL_SEED` は後から変更できないため。空 Enter でランダム)。
+続いて「**詳細設定をカスタマイズしますか? [y/N]**」と確認され、`y` を選んだときだけ
+上記の `MOTD` / `DIFFICULTY` / `GAMEMODE` / `MAX_PLAYERS` / `PVP` / `VIEW_DISTANCE` /
+`SIMULATION_DISTANCE` / `HARDCORE` を順に尋ねます(不正値は再入力)。
+環境変数で渡した項目は、このゲート内でも対話をスキップします。
+
+非対話(パイプ実行や TTY 無し)では従来どおりプロンプトは出ず、環境変数の値だけが反映されます。
+
 ## 運用
 
 ```bash
@@ -110,6 +144,37 @@ Bedrock は `whitelist add <名前>` では追加できないため、このヘ�
 
 op も付けたい場合は再起動が必要なので、setup.sh の `ADMIN_PLAYER` / `BEDROCK_PLAYER` を使います。
 
+### ゲームプレイ設定を後から変更(`mc-config`)
+
+構築後にゲームプレイ設定を変更するヘルパーです(`/usr/local/bin` に自動配置)。
+対象は 8 項目 — `motd` / `difficulty` / `gamemode` / `max-players` / `pvp` /
+`view-distance` / `simulation-distance` / `hardcore`。
+(`level-seed` は world 生成時に焼き込まれ後から変更できないため対象外です。)
+
+```bash
+sudo mc-config                            # 現在値を一覧表示(端末なら編集メニュー)
+sudo mc-config <key> <value>              # 1 項目を変更
+sudo mc-config <key> <value> --restart    # 再起動が必要な変更を即時反映
+sudo mc-config get <key>                  # 1 項目の現在値を表示
+```
+
+例:
+
+```bash
+sudo mc-config difficulty hard            # 即反映
+sudo mc-config motd "&aWelcome"           # & カラーコードは § に変換して書き込み
+sudo mc-config max-players 30 --restart   # 再起動して反映
+sudo mc-config get view-distance
+```
+
+反映方法は項目ごとに異なります。
+
+- **稼働中に即反映**: `difficulty` / `gamemode` / `pvp`(1.21.9 以上 / 26.x のゲームルール経路)
+  — server.properties への書き込みに加え、起動中ならコンソールへ該当コマンドを送って反映します。
+- **再起動が必要**: `motd` / `max-players` / `view-distance` / `simulation-distance` / `hardcore`
+  (および 1.21.8 以下の `pvp`)— 端末では「今すぐ再起動しますか? [y/N]」と確認し、
+  `--restart` を付けると確認なしで `systemctl restart minecraft` まで行います。
+
 ## 更新
 
 PaperMC とプラグインを最新化します(ワールド・設定は保護されます)。
@@ -139,6 +204,7 @@ sudo MC_VERSION=26.1.3 ./update.sh    # 別バージョンへ更新
 | `update.sh` | Paper / プラグインの最新化 |
 | `mc-console` | コンソールにアタッチ(停止中なら起動)するヘルパー。`/usr/local/bin` に自動配置 |
 | `mc-whitelist` | 起動中に Java/Bedrock を whitelist 追加して reload するヘルパー。`/usr/local/bin` に自動配置 |
+| `mc-config` | 構築後にゲームプレイ設定(motd/難易度/PvP など 8 項目)を変更するヘルパー。`/usr/local/bin` に自動配置 |
 
 ## ライセンス
 

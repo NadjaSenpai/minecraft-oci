@@ -1,0 +1,344 @@
+#!/usr/bin/env bash
+#
+# mc-config — Minecraft サーバーのゲームプレイ設定 (server.properties) を
+# 編集して反映する。対象は8項目: motd / difficulty / gamemode / max-players /
+# pvp / view-distance / simulation-distance / hardcore。
+# (level-seed は world 生成時に焼き込まれ後変更不可のため対象外。)
+#
+# 反映方法は項目ごとに異なる (Phase 0-C/E):
+#   difficulty : ファイル書込 + 稼働中ならコンソールに `difficulty <値>` を送り即反映。
+#   gamemode   : ファイル書込 + 稼働中ならコンソールに `defaultgamemode <値>` を送り即反映。
+#   pvp        : バージョン分岐。1.21.9+/26.x はゲームルール (`gamerule pvp <値>`、
+#                world 永続・server.properties キー無し)。≤1.21.8 はファイルキー (再起動要)。
+#   motd / max-players / view-distance / simulation-distance / hardcore:
+#                ファイル書込のみ。反映には再起動が必要。
+# (存在しないコマンド /motd /maxplayers /viewdistance などは送らない。Phase 0-E)
+#
+# 使い方:
+#   sudo mc-config                       現在値を一覧表示 (対話端末なら編集メニュー)
+#   sudo mc-config <key> <value>         指定キーを検証して反映
+#   sudo mc-config <key> <value> --restart  再起動要の変更を即時 systemctl restart で反映
+#   sudo mc-config get <key>             指定キーの現在値を表示
+#
+# motd は & のカラーコードを § (Java エスケープ) に変換して書き込みます。
+
+set -euo pipefail
+
+MC_USER="minecraft"
+MC_DIR="/opt/minecraft"
+if [ -r /etc/default/minecraft ]; then . /etc/default/minecraft; fi
+MC_USER="${MC_USER:-minecraft}"
+MC_DIR="${MC_DIR:-/opt/minecraft}"
+TMUX_SOCKET="minecraft"
+TMUX_SESSION="minecraft"
+SERVICE_NAME="minecraft"
+PROP="$MC_DIR/server.properties"
+
+# 編集対象の8キー (level-seed は対象外)。
+KEYS="motd difficulty gamemode max-players pvp view-distance simulation-distance hardcore"
+
+# --- バリデーション (setup.sh から複製。リポジトリ方針=スクリプト自己完結) -----------
+
+valid_enum() {  # valid_enum <value> <allowed...(空白区切り)>  -> 一致すれば真
+  local v=$1; shift
+  local a
+  for a in $*; do [ "$v" = "$a" ] && return 0; done
+  return 1
+}
+
+valid_int_range() {  # valid_int_range <value> <min> <max>  -> 整数かつ範囲内なら真
+  local v=$1 min=$2 max=$3
+  case "$v" in ''|*[!0-9-]*) return 1;; esac   # 数字 (と先頭の符号) 以外を含む
+  case "$v" in -*) ;; *[!0-9]*) return 1;; esac
+  [ "$v" -ge "$min" ] && [ "$v" -le "$max" ]
+}
+
+valid_bool() {  # valid_bool <value>  -> true/false なら真
+  case "$1" in true|false) return 0;; *) return 1;; esac
+}
+
+# motd を server.properties 用に正規化する。Phase 0-D: properties には生 § ではなく
+# Java エスケープの § を書く。プラグイン慣習の & カラーコードは § へ変換する。
+normalize_motd() {  # normalize_motd <value>  -> 変換後の文字列を stdout へ
+  printf '%s' "${1//&/\\u00A7}"
+}
+
+# MC_VERSION がモダン (1.21.9 以上、または年次版でメジャー > 21) かを判定する。
+# Phase 0-E: pvp は 1.21.9+/26.x ではゲームルール、≤1.21.8 では server.properties キー。
+# Minecraft のバージョン体系は2系統: クラシック "1.21.9" (先頭=1) と年次版 "26.1.2" (先頭>21)。
+is_modern_mc() {  # is_modern_mc  -> モダンなら真
+  local ver="${MC_VERSION:-}" major minor patch rest
+  major="${ver%%.*}"
+  case "$major" in ''|*[!0-9]*) return 1;; esac
+  # 先頭コンポーネント > 21 = 22/26 などの年次版 → モダン
+  [ "$major" -gt 21 ] && return 0
+  # 先頭 == 1 = クラシック系。minor.patch を 1.21.9 と比較
+  if [ "$major" -eq 1 ]; then
+    rest="${ver#*.}"               # "21.9" -> minor
+    minor="${rest%%.*}"
+    case "$minor" in ''|*[!0-9]*) minor=0;; esac
+    [ "$minor" -gt 21 ] && return 0
+    if [ "$minor" -eq 21 ]; then
+      patch="${rest#*.}"           # "9" / "9.x" などの後続
+      patch="${patch%%.*}"
+      [ "$patch" = "$rest" ] && patch=0   # "1.21" のように patch 無し
+      case "$patch" in ''|*[!0-9]*) patch=0;; esac
+      [ "$patch" -ge 9 ] && return 0
+    fi
+  fi
+  return 1
+}
+
+# server.properties に key=val を upsert する (既存値は置換、無ければ追記)。
+# setup.sh の set_prop を基にしているが、置換側 (val) を sed 置換文字列として
+# リテラル化している。motd の正規化値は "§" を含み、GNU sed の置換では \ が
+# エスケープ (\u=次字を大文字化) として解釈され "00A7" に化けてしまうため、
+# val 内の \ & | を退避してから置換する (Phase 0-D: § エスケープを正しく書く)。
+set_prop() {
+  local file=$1 key=$2 val=$3 esc
+  if grep -q "^${key}=" "$file"; then
+    esc="${val//\\/\\\\}"     # バックスラッシュを二重化 (\u → \\u)
+    esc="${esc//&/\\&}"       # sed 置換の & (マッチ全体) を無効化
+    esc="${esc//|/\\|}"       # 区切り文字 | を無効化
+    sed -i "s|^${key}=.*|${key}=${esc}|" "$file"
+  else
+    echo "${key}=${val}" >> "$file"
+  fi
+}
+
+# --- ヘルパ -------------------------------------------------------------------
+
+err()  { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; }
+note() { printf '  %s\n' "$*"; }
+
+# server.properties から key の現在値を読む (無ければ空)。
+get_prop() {  # get_prop <key> -> 値を stdout へ
+  local key=$1
+  [ -f "$PROP" ] || return 0
+  sed -n "s|^${key}=||p" "$PROP" | head -1
+}
+
+# サーバー (tmux セッション) が起動中か。
+server_running() {
+  sudo -u "$MC_USER" tmux -L "$TMUX_SOCKET" has-session -t "$TMUX_SESSION" 2>/dev/null
+}
+
+# 起動中のサーバーコンソールにコマンドを送る (先頭スラッシュ無し・repo 慣習)。
+console_send() {  # console_send <command-line>
+  sudo -u "$MC_USER" tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" "$1" Enter
+}
+
+# 書込後の所有者補正。
+fix_owner() { chown "$MC_USER":"$MC_USER" "$PROP" 2>/dev/null || true; }
+
+# キーが対象8項目か検証。不正なら有効キー一覧を出して exit 1。
+require_known_key() {  # require_known_key <key>
+  local key=$1
+  valid_enum "$key" "$KEYS" && return 0
+  err "未知のキーです: '$key'"
+  note "有効なキー: $KEYS"
+  exit 1
+}
+
+# 値を検証 (キーごとの規則)。OK なら 0、不正なら明確なエラーを出して exit 1。
+validate_value() {  # validate_value <key> <value>
+  local key=$1 val=$2
+  case "$key" in
+    difficulty)
+      valid_enum "$val" "peaceful easy normal hard" \
+        || { err "difficulty が不正です: '$val'"; note "有効値: peaceful easy normal hard"; exit 1; } ;;
+    gamemode)
+      valid_enum "$val" "survival creative adventure spectator" \
+        || { err "gamemode が不正です: '$val'"; note "有効値: survival creative adventure spectator"; exit 1; } ;;
+    max-players)
+      valid_int_range "$val" 0 2147483647 \
+        || { err "max-players が不正です: '$val'"; note "0 以上の整数を指定してください"; exit 1; } ;;
+    view-distance)
+      valid_int_range "$val" 3 32 \
+        || { err "view-distance が不正です: '$val'"; note "3〜32 の整数を指定してください"; exit 1; } ;;
+    simulation-distance)
+      valid_int_range "$val" 3 32 \
+        || { err "simulation-distance が不正です: '$val'"; note "3〜32 の整数を指定してください"; exit 1; } ;;
+    pvp)
+      valid_bool "$val" \
+        || { err "pvp が不正です: '$val'"; note "true または false を指定してください"; exit 1; } ;;
+    hardcore)
+      valid_bool "$val" \
+        || { err "hardcore が不正です: '$val'"; note "true または false を指定してください"; exit 1; } ;;
+    motd)
+      : ;;  # motd は任意文字列。制約なし。
+  esac
+}
+
+# 再起動要の変更後の処理。
+# - 稼働中 + 対話端末: y/N で確認、yes なら systemctl restart。
+# - 稼働中 + 非対話: --restart 指定時のみ restart。それ以外は「次回起動時」案内。
+# - 未起動: 次回起動時に反映と案内。
+RESTART_FLAG=0
+handle_restart() {  # handle_restart <key>
+  local key=$1
+  if ! server_running; then
+    note "サーバーは未起動です。$key は次回起動時に反映されます。"
+    return 0
+  fi
+  if [ "$RESTART_FLAG" -eq 1 ]; then
+    note "サーバーを再起動して $key を反映します..."
+    systemctl restart "$SERVICE_NAME"
+    note "再起動を指示しました。"
+    return 0
+  fi
+  if [ -t 0 ]; then
+    local a
+    printf '  今すぐ再起動しますか? [y/N]: '
+    IFS= read -r a || a=""
+    case "$a" in
+      y|Y|yes|Yes|YES)
+        note "サーバーを再起動して $key を反映します..."
+        systemctl restart "$SERVICE_NAME"
+        note "再起動を指示しました。" ;;
+      *)
+        note "再起動しませんでした。$key は次回起動時に反映されます。" ;;
+    esac
+  else
+    note "$key は次回起動時に反映されます (即時反映するには --restart を指定)。"
+  fi
+}
+
+# 1キーを検証して反映方法ごとに適用する。
+apply_key() {  # apply_key <key> <value>
+  local key=$1 val=$2
+  validate_value "$key" "$val"
+
+  case "$key" in
+    difficulty)
+      set_prop "$PROP" difficulty "$val"; fix_owner
+      printf '\033[1;32m✓\033[0m difficulty=%s をファイルに書き込みました\n' "$val"
+      if server_running; then
+        console_send "difficulty $val"
+        note "起動中のサーバーに 'difficulty $val' を送信しました (即反映)。"
+      else
+        note "サーバーは未起動です。次回起動時に反映されます。"
+      fi
+      ;;
+    gamemode)
+      set_prop "$PROP" gamemode "$val"; fix_owner
+      printf '\033[1;32m✓\033[0m gamemode=%s をファイルに書き込みました\n' "$val"
+      if server_running; then
+        console_send "defaultgamemode $val"
+        note "起動中のサーバーに 'defaultgamemode $val' を送信しました (新規参加者に即反映)。"
+      else
+        note "サーバーは未起動です。次回起動時に反映されます。"
+      fi
+      ;;
+    pvp)
+      if is_modern_mc; then
+        # モダン: ゲームルール。server.properties には書かない (Phase 0-E)。
+        if server_running; then
+          console_send "gamerule pvp $val"
+          printf '\033[1;32m✓\033[0m ゲームルール pvp=%s を送信しました (world 永続)\n' "$val"
+        else
+          note "pvp はこのバージョンではゲームルールです。サーバーは未起動のため設定できませんでした。"
+          note "起動後に 'sudo mc-config pvp $val' を再実行してください。"
+        fi
+      else
+        # レガシー: server.properties キー (再起動要)。
+        set_prop "$PROP" pvp "$val"; fix_owner
+        printf '\033[1;32m✓\033[0m pvp=%s をファイルに書き込みました\n' "$val"
+        handle_restart pvp
+      fi
+      ;;
+    motd)
+      set_prop "$PROP" motd "$(normalize_motd "$val")"; fix_owner
+      printf '\033[1;32m✓\033[0m motd をファイルに書き込みました\n'
+      handle_restart motd
+      ;;
+    max-players|view-distance|simulation-distance|hardcore)
+      set_prop "$PROP" "$key" "$val"; fix_owner
+      printf '\033[1;32m✓\033[0m %s=%s をファイルに書き込みました\n' "$key" "$val"
+      handle_restart "$key"
+      ;;
+  esac
+}
+
+# 現在値を1キー表示用に整形する (pvp/モダンはゲームルール注記)。
+show_value() {  # show_value <key> -> 値を stdout へ
+  local key=$1 v
+  if [ "$key" = "pvp" ] && is_modern_mc; then
+    printf '%s' '(ゲームルール: ゲーム内で /gamerule pvp 確認)'
+    return 0
+  fi
+  v="$(get_prop "$key")"
+  printf '%s' "${v:-(未設定)}"
+}
+
+# 現在値の一覧テーブルを表示する。
+print_table() {
+  printf '\n\033[1m現在のゲームプレイ設定\033[0m  (%s)\n' "$PROP"
+  if [ ! -f "$PROP" ]; then
+    note "server.properties がまだ存在しません ($PROP)。setup.sh 実行後に利用できます。"
+  fi
+  local key
+  for key in $KEYS; do
+    printf '  %-22s %s\n' "$key" "$(show_value "$key")"
+  done
+  printf '\n'
+}
+
+# 対話編集メニュー: 番号でキーを選び、新しい値を入力して適用する。
+interactive_menu() {
+  local i=0 key choices=() sel val
+  for key in $KEYS; do
+    i=$((i+1))
+    choices+=("$key")
+    printf '  %2d) %s\n' "$i" "$key"
+  done
+  printf '   0) 終了\n\n'
+  printf '編集する項目の番号: '
+  IFS= read -r sel || sel=""
+  case "$sel" in
+    ''|0) note "終了します。"; return 0 ;;
+    *[!0-9]*) err "番号で指定してください。"; return 0 ;;
+  esac
+  if [ "$sel" -lt 1 ] || [ "$sel" -gt "$i" ]; then
+    err "範囲外の番号です: $sel"; return 0
+  fi
+  key="${choices[$((sel-1))]}"
+  printf '%s の新しい値: ' "$key"
+  IFS= read -r val || val=""
+  [ -n "$val" ] || { note "空のため変更しませんでした。"; return 0; }
+  apply_key "$key" "$val"
+}
+
+# --- メイン -------------------------------------------------------------------
+
+[ "$(id -u)" -eq 0 ] || { err "root で実行してください: sudo mc-config ..."; exit 1; }
+
+# --restart フラグを引数列から抜き出す (位置はどこでも可)。
+ARGS=()
+for a in "$@"; do
+  if [ "$a" = "--restart" ]; then RESTART_FLAG=1; else ARGS+=("$a"); fi
+done
+set -- ${ARGS[@]+"${ARGS[@]}"}
+
+case "${1:-}" in
+  "")
+    # 引数なし: 一覧 + (対話端末なら) 編集メニュー。
+    print_table
+    if [ -t 0 ]; then
+      interactive_menu
+    fi
+    ;;
+  get)
+    key="${2:-}"
+    [ -n "$key" ] || { err "使い方: sudo mc-config get <key>"; note "有効なキー: $KEYS"; exit 1; }
+    require_known_key "$key"
+    printf '%s\n' "$(show_value "$key")"
+    ;;
+  *)
+    key="$1"
+    require_known_key "$key"
+    val="${2:-}"
+    [ $# -ge 2 ] || { err "値が指定されていません: sudo mc-config $key <value>"; exit 1; }
+    apply_key "$key" "$val"
+    ;;
+esac
