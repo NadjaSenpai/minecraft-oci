@@ -589,7 +589,7 @@ fi
 # 10. systemd サービス
 # ---------------------------------------------------------------------------
 step "systemd サービスの設定"
-for helper in mc-console mc-whitelist; do
+for helper in mc-console mc-whitelist mc-config; do
   if [ -f "$SCRIPT_DIR/$helper" ]; then
     install -m 0755 "$SCRIPT_DIR/$helper" "/usr/local/bin/$helper"
     ok "$helper を /usr/local/bin に配置"
