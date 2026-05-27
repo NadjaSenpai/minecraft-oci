@@ -4,7 +4,7 @@ OCI Always Free の ARM インスタンス上に、**PaperMC + GeyserMC/Floodgat
 
 ## 特徴
 
-- **Eclipse Temurin 21** を Adoptium apt リポジトリから導入
+- **Eclipse Temurin** を Adoptium apt リポジトリから導入(MC バージョンが要求する Java を fill API から解決して自動選択。例: 26.1.x → Java 25、1.21.x → Java 21)
 - 専用システムユーザー `minecraft` / `/opt/minecraft` で隔離実行
 - **PaperMC** はバージョンを固定しつつ、ビルド番号は PaperMC API (v3 fill) で自動解決
 - **GeyserMC + Floodgate** でクロスプレイ(`auth-type: floodgate` を自動設定)

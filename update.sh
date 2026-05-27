@@ -17,7 +17,7 @@ SERVICE_NAME="minecraft"
 PAPER_UA="minecraft-oci (+https://github.com/NadjaSenpai/minecraft-oci)"
 
 STEP=0
-TOTAL_STEPS=4
+TOTAL_STEPS=5
 SCRIPT_START="$(date +%s)"
 
 _ts()      { date '+%H:%M:%S'; }
@@ -81,7 +81,29 @@ systemctl stop "$SERVICE_NAME" || true
 ok "停止完了"
 
 # ---------------------------------------------------------------------------
-# 2. PaperMC の更新
+# 2. Java の確認 (MC が要求する版を fill API から解決し、足りなければ導入)
+# ---------------------------------------------------------------------------
+step "Java の確認"
+JAVA_MIN="$(paper_meta "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}" 2>/dev/null | jq -r '.version.java.version.minimum // empty')"
+[ -n "$JAVA_MIN" ] || JAVA_MIN=21
+JAVA_BIN="$(ls -d /usr/lib/jvm/temurin-"${JAVA_MIN}"-jdk-*/bin/java 2>/dev/null | head -1 || true)"
+if [ -z "$JAVA_BIN" ] || [ ! -x "$JAVA_BIN" ]; then
+  log "Minecraft $MC_VERSION は Java ${JAVA_MIN} が必要。temurin-${JAVA_MIN}-jdk を導入します..."
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y "temurin-${JAVA_MIN}-jdk"
+  JAVA_BIN="$(ls -d /usr/lib/jvm/temurin-"${JAVA_MIN}"-jdk-*/bin/java 2>/dev/null | head -1 || true)"
+fi
+{ [ -n "$JAVA_BIN" ] && [ -x "$JAVA_BIN" ]; } || die "Temurin ${JAVA_MIN} が見つかりません。setup.sh を実行してください。"
+if grep -q '^JAVA_BIN=' "$ENV_FILE"; then
+  sed -i "s|^JAVA_BIN=.*|JAVA_BIN=${JAVA_BIN}|" "$ENV_FILE"
+else
+  echo "JAVA_BIN=${JAVA_BIN}" >> "$ENV_FILE"
+fi
+ok "Java ${JAVA_MIN}: ${JAVA_BIN}"
+
+# ---------------------------------------------------------------------------
+# 3. PaperMC の更新
 # ---------------------------------------------------------------------------
 step "PaperMC の更新"
 log "PaperMC $MC_VERSION の最新ビルドを PaperMC API (v3 fill) で解決..."
@@ -98,7 +120,7 @@ chown "$MC_USER":"$MC_USER" "$MC_DIR/paper.jar"
 ok "paper.jar を差し替え"
 
 # ---------------------------------------------------------------------------
-# 3. プラグインの更新
+# 4. プラグインの更新
 # ---------------------------------------------------------------------------
 step "プラグイン (Geyser / Floodgate) の更新"
 fetch_mc "https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot" "$MC_DIR/plugins/Geyser-Spigot.jar" "GeyserMC (Spigot, latest)"
@@ -111,7 +133,7 @@ sed -i "s|^MC_VERSION=.*|MC_VERSION=${MC_VERSION}|" "$ENV_FILE"
 ok "環境ファイルの MC_VERSION を ${MC_VERSION} に更新"
 
 # ---------------------------------------------------------------------------
-# 4. サービス再起動 & 起動確認
+# 5. サービス再起動 & 起動確認
 # ---------------------------------------------------------------------------
 step "サービス再起動 & 起動確認"
 systemctl start "$SERVICE_NAME"

@@ -122,11 +122,15 @@ apt-get install -y curl wget jq tmux ca-certificates gnupg iptables iptables-per
 ok "依存パッケージ導入完了"
 
 # ---------------------------------------------------------------------------
-# 3. Eclipse Temurin 21 (Adoptium apt)
+# 3. Java (Eclipse Temurin) — MC バージョンが要求する版を fill API から自動選択
 # ---------------------------------------------------------------------------
-step "Java 21 (Eclipse Temurin)"
-if java -version 2>&1 | grep -q 'version "21'; then
-  ok "Java 21 は導入済み: $(java -version 2>&1 | head -1)"
+step "Java (Eclipse Temurin)"
+JAVA_MIN="$(paper_meta "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}" 2>/dev/null | jq -r '.version.java.version.minimum // empty')"
+[ -n "$JAVA_MIN" ] || JAVA_MIN=21
+ok "Minecraft $MC_VERSION が要求する Java: ${JAVA_MIN}"
+JAVA_BIN="$(ls -d /usr/lib/jvm/temurin-"${JAVA_MIN}"-jdk-*/bin/java 2>/dev/null | head -1 || true)"
+if [ -n "$JAVA_BIN" ] && [ -x "$JAVA_BIN" ]; then
+  ok "Temurin ${JAVA_MIN} は導入済み"
 else
   log "Adoptium GPG キーを登録..."
   install -d -m 0755 /etc/apt/keyrings
@@ -138,10 +142,12 @@ else
   echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb ${CODENAME} main" \
     > /etc/apt/sources.list.d/adoptium.list
   apt-get update -qq
-  log "temurin-21-jdk を導入 (ダウンロードに少し時間がかかります)..."
-  apt-get install -y temurin-21-jdk
-  ok "導入完了: $(java -version 2>&1 | head -1)"
+  log "temurin-${JAVA_MIN}-jdk を導入 (ダウンロードに少し時間がかかります)..."
+  apt-get install -y "temurin-${JAVA_MIN}-jdk"
+  JAVA_BIN="$(ls -d /usr/lib/jvm/temurin-"${JAVA_MIN}"-jdk-*/bin/java 2>/dev/null | head -1 || true)"
 fi
+{ [ -n "$JAVA_BIN" ] && [ -x "$JAVA_BIN" ]; } || die "Temurin ${JAVA_MIN} の java が見つかりません (温存パス: /usr/lib/jvm/temurin-${JAVA_MIN}-jdk-*)。"
+ok "Java: $("$JAVA_BIN" -version 2>&1 | head -1)"
 
 # ---------------------------------------------------------------------------
 # 4. 専用ユーザーとディレクトリ
@@ -214,6 +220,7 @@ MC_VERSION=${MC_VERSION}
 MEMORY_GB=${MEMORY_GB}
 MC_DIR=${MC_DIR}
 MC_USER=${MC_USER}
+JAVA_BIN=${JAVA_BIN}
 EOF
 ok "環境ファイルを書き込み: $ENV_FILE"
 
@@ -240,7 +247,7 @@ fi
 
 # exec により java がこのプロセスを引き継ぐ ($$ は不変) → PIDFile が java を指す
 echo $$ > "${RUNTIME_DIRECTORY:-/run/minecraft}/server.pid"
-exec java \
+exec "${JAVA_BIN:-java}" \
   -Xms"${MEMORY_GB}"G -Xmx"${MEMORY_GB}"G \
   -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 \
   -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch \
@@ -265,7 +272,7 @@ GEYSER_CFG="$MC_DIR/plugins/Geyser-Spigot/config.yml"
 if [ ! -f "$GEYSER_CFG" ] || [ ! -f "$MC_DIR/server.properties" ]; then
   log "サーバーを一度起動して設定ファイルを生成します (ワールド生成のため数分かかります)..."
   BOOT_LOG="$MC_DIR/bootstrap.log"
-  run_as_mc "cd '$MC_DIR' && printf 'stop\n' | timeout 600 java -Xms1G -Xmx2G -jar paper.jar --nogui > '$BOOT_LOG' 2>&1" &
+  run_as_mc "cd '$MC_DIR' && printf 'stop\n' | timeout 600 '$JAVA_BIN' -Xms1G -Xmx2G -jar paper.jar --nogui > '$BOOT_LOG' 2>&1" &
   BOOT_PID=$!
   wait_progress "$BOOT_LOG" "$BOOT_PID" "" || true
   wait "$BOOT_PID" 2>/dev/null || true
