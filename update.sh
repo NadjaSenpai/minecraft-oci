@@ -30,9 +30,11 @@ die()  { printf '\n\033[1;31m✗ ERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "root で実行してください (sudo ./update.sh)"
 [ -r "$ENV_FILE" ] || die "$ENV_FILE が見つかりません。先に setup.sh を実行してください。"
+# 環境変数で渡された MC_VERSION を優先する (env ファイルの sourcing で上書きされないよう退避)
+MC_VERSION_OVERRIDE="${MC_VERSION:-}"
 . "$ENV_FILE"
 
-MC_VERSION="${MC_VERSION:-}"
+MC_VERSION="${MC_VERSION_OVERRIDE:-${MC_VERSION:-}}"
 MC_DIR="${MC_DIR:-/opt/minecraft}"
 MC_USER="${MC_USER:-minecraft}"
 [ -n "$MC_VERSION" ] || die "MC_VERSION が未設定です。"
