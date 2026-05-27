@@ -25,17 +25,24 @@ OCI Always Free の ARM インスタンス上に、**PaperMC + GeyserMC/Floodgat
 3 ファイル(`setup.sh` / `update.sh` / `mc-console`)を VM 上の同じディレクトリに置いて実行します。
 
 ```bash
-ADMIN_PLAYER=あなたのJava版ユーザー名 sudo -E ./setup.sh
+# Java 版のみ
+sudo ADMIN_PLAYER=あなたのJava版ユーザー名 ./setup.sh
+
+# クロスプレイ(Java + Bedrock 両方を whitelist + op)
+sudo ADMIN_PLAYER=あなたのJava版名 BEDROCK_PLAYER=あなたのBedrockゲーマータグ ./setup.sh
 ```
 
 完了すると Java 版・Bedrock 版の接続先と、後述の **OCI セキュリティリスト** 設定手順が表示されます。
+
+> Bedrock プレイヤーは Mojang プロフィールを持たないため `whitelist add <名前>` では登録できません。`BEDROCK_PLAYER` を使うと XUID から Floodgate UUID を計算して whitelist に追加します。
 
 ## 設定(環境変数で上書き可)
 
 | 変数 | 既定値 | 説明 |
 |---|---|---|
 | `MC_VERSION` | `26.1.2` | Minecraft バージョン(ビルドは自動解決) |
-| `ADMIN_PLAYER` | (空) | `whitelist add` + `op` する Java 版ユーザー名 |
+| `ADMIN_PLAYER` | (空) | whitelist + op する Java 版ユーザー名(Mojang UUID で登録) |
+| `BEDROCK_PLAYER` | (空) | whitelist + op する Bedrock 版ゲーマータグ(XUID→Floodgate UUID で登録) |
 | `MEMORY` | 総 RAM の約 75% | ヒープサイズ(GB 整数) |
 | `ACCEPT_EULA` | `true` | Minecraft EULA への同意 |
 | `MC_USER` | `minecraft` | 実行ユーザー |

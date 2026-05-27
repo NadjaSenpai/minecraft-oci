@@ -9,7 +9,9 @@
 #   ADMIN_PLAYER=YourName sudo -E ./setup.sh
 #
 #   MC_VERSION    Minecraft バージョン            (既定: 26.1.2)
-#   ADMIN_PLAYER  whitelist 追加 + op する Java 名 (既定: 空 = 登録しない)
+#   ADMIN_PLAYER  whitelist + op する Java 名      (既定: 空 = 登録しない)
+#   BEDROCK_PLAYER whitelist + op する Bedrock 名   (既定: 空 = 登録しない)
+#                 Bedrock(統合版)のゲーマータグ。XUID から Floodgate UUID を計算して登録。
 #   MEMORY        ヒープサイズ(GB整数)            (既定: 総RAMの約75%)
 #   ACCEPT_EULA   Minecraft EULA への同意          (既定: true)
 #   MC_USER       実行ユーザー                     (既定: minecraft)
@@ -23,6 +25,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MC_VERSION="${MC_VERSION:-26.1.2}"
 ADMIN_PLAYER="${ADMIN_PLAYER:-}"
+BEDROCK_PLAYER="${BEDROCK_PLAYER:-}"
 ACCEPT_EULA="${ACCEPT_EULA:-true}"
 MC_USER="${MC_USER:-minecraft}"
 MC_DIR="${MC_DIR:-/opt/minecraft}"
@@ -334,6 +337,26 @@ if [ -n "$ADMIN_PLAYER" ]; then
   fi
 else
   warn "ADMIN_PLAYER 未指定。white-list=true のため誰も参加できません。mc-console で 'whitelist add <名前>' を実行してください。"
+fi
+
+# Bedrock (Floodgate) プレイヤーを whitelist + op。Bedrock は Mojang プロフィールを
+# 持たないため、Geyser API で XUID を取得し Floodgate UUID (new UUID(0, xuid)) を
+# 計算して直接書く。名前は Floodgate のプレフィックス (既定 ".") 付き。
+if [ -n "$BEDROCK_PLAYER" ]; then
+  systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+  log "$BEDROCK_PLAYER (Bedrock) の XUID を Geyser API で解決..."
+  BR_XUID="$(curl -fsSL "https://api.geysermc.org/v2/xbox/xuid/${BEDROCK_PLAYER}" 2>/dev/null | jq -r '.xuid // empty')" || BR_XUID=""
+  if [ -n "$BR_XUID" ]; then
+    BR_HEX="$(printf '%016x' "$BR_XUID")"
+    BR_UUID="00000000-0000-0000-${BR_HEX:0:4}-${BR_HEX:4:12}"
+    BR_NAME=".${BEDROCK_PLAYER}"
+    upsert_json "$MC_DIR/whitelist.json" "{\"uuid\":\"$BR_UUID\",\"name\":\"$BR_NAME\"}"
+    upsert_json "$MC_DIR/ops.json" "{\"uuid\":\"$BR_UUID\",\"name\":\"$BR_NAME\",\"level\":4,\"bypassesPlayerLimit\":false}"
+    chown "$MC_USER":"$MC_USER" "$MC_DIR/whitelist.json" "$MC_DIR/ops.json"
+    ok "$BR_NAME を whitelist + op (Floodgate UUID $BR_UUID)"
+  else
+    warn "$BEDROCK_PLAYER の XUID を解決できませんでした (ゲーマータグを確認)。"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
