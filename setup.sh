@@ -33,115 +33,166 @@ TMUX_SESSION="minecraft"
 SERVICE_NAME="minecraft"
 ENV_FILE="/etc/default/minecraft"
 
-log()  { printf '\033[1;32m[setup]\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m[warn ]\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
+STEP=0
+TOTAL_STEPS=12
+SCRIPT_START="$(date +%s)"
+
+_ts()     { date '+%H:%M:%S'; }
+_elapsed() { printf '%ds' "$(( $(date +%s) - SCRIPT_START ))"; }
+step() { STEP=$((STEP+1)); printf '\n\033[1;36m━━━ [%d/%d] %s\033[0m \033[2m(%s / 経過 %s)\033[0m\n' "$STEP" "$TOTAL_STEPS" "$*" "$(_ts)" "$(_elapsed)"; }
+log()  { printf '  \033[1;32m•\033[0m %s\n' "$*"; }
+ok()   { printf '  \033[1;32m✓\033[0m %s\n' "$*"; }
+warn() { printf '  \033[1;33m! %s\033[0m\n' "$*" >&2; }
+die()  { printf '\n\033[1;31m✗ ERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 
 run_as_mc() { sudo -u "$MC_USER" bash -c "$1"; }
 
+# minecraft ユーザーでダウンロード (進捗バーを表示)
+fetch_mc() {  # fetch_mc <url> <dest> <label>
+  log "ダウンロード: $3"
+  run_as_mc "curl -fL --progress-bar '$1' -o '$2'"
+}
+
+# 起動ログを監視し、ワールド生成の進捗と経過秒数をライブ表示する。
+# wait_progress <監視対象ログ> <PID または 空> <完了マーカー正規表現>
+#   PID 指定時はそのプロセスが終わるまで、完了マーカー指定時はマッチするまで監視する。
+wait_progress() {
+  local logf="$1" pid="${2:-}" donm="${3:-}" start el prog hit=1
+  start="$(date +%s)"
+  while :; do
+    el=$(( $(date +%s) - start ))
+    prog="$(grep -oE 'Preparing spawn area: [0-9]+%' "$logf" 2>/dev/null | tail -1)"
+    printf '\r\033[K  \033[2m%s\033[0m  経過 %ds' "${prog:-起動処理中...}" "$el"
+    if [ -n "$donm" ] && grep -q "$donm" "$logf" 2>/dev/null; then hit=0; break; fi
+    if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then hit=0; break; fi
+    [ "$el" -ge 240 ] && { hit=1; break; }
+    sleep 2
+  done
+  printf '\r\033[K'
+  return $hit
+}
+
 # ---------------------------------------------------------------------------
-# 0. プリフライト
+# 1. 事前チェック
 # ---------------------------------------------------------------------------
+step "事前チェック"
 [ "$(id -u)" -eq 0 ] || die "root で実行してください (sudo ./setup.sh)"
+ok "root 権限を確認"
 
 if [ -r /etc/os-release ]; then
   . /etc/os-release
-  [ "${ID:-}" = "ubuntu" ] || warn "Ubuntu 以外を検出 (${ID:-unknown})。Ubuntu 22.04 / 24.04 向けスクリプトです。"
+  if [ "${ID:-}" = "ubuntu" ]; then
+    ok "OS: ${PRETTY_NAME:-Ubuntu}"
+  else
+    warn "Ubuntu 以外を検出 (${ID:-unknown})。Ubuntu 22.04 / 24.04 向けスクリプトです。"
+  fi
 fi
 
 ARCH="$(uname -m)"
-[ "$ARCH" = "aarch64" ] || warn "ARM64 (aarch64) 以外を検出 ($ARCH)。OCI ARM 向けに作られています。"
+if [ "$ARCH" = "aarch64" ]; then ok "アーキテクチャ: $ARCH"; else warn "ARM64 (aarch64) 以外を検出 ($ARCH)。OCI ARM 向けに作られています。"; fi
 
 if [ "$ACCEPT_EULA" != "true" ]; then
   die "Minecraft EULA 未同意です。ACCEPT_EULA=true を指定すると同意したものとして続行します (https://aka.ms/MinecraftEULA)。"
 fi
-log "Minecraft EULA に同意したものとして eula.txt を作成します (https://aka.ms/MinecraftEULA)。"
+ok "Minecraft EULA に同意 (https://aka.ms/MinecraftEULA)"
+log "設定: MC_VERSION=$MC_VERSION / MC_DIR=$MC_DIR / ADMIN_PLAYER=${ADMIN_PLAYER:-(未指定)}"
 
 # ---------------------------------------------------------------------------
-# 1. 依存パッケージ
+# 2. 依存パッケージ
 # ---------------------------------------------------------------------------
-log "依存パッケージを導入します..."
+step "依存パッケージの導入"
 export DEBIAN_FRONTEND=noninteractive
 # iptables-persistent のインストール時プロンプトを抑止
 echo "iptables-persistent iptables-persistent/autosave_v4 boolean true" | debconf-set-selections
 echo "iptables-persistent iptables-persistent/autosave_v6 boolean true" | debconf-set-selections
+log "apt パッケージインデックスを更新..."
 apt-get update -qq
-apt-get install -y -qq curl wget jq tmux ca-certificates gnupg iptables iptables-persistent netfilter-persistent
+log "導入: curl wget jq tmux ca-certificates gnupg iptables iptables-persistent netfilter-persistent"
+apt-get install -y curl wget jq tmux ca-certificates gnupg iptables iptables-persistent netfilter-persistent
+ok "依存パッケージ導入完了"
 
 # ---------------------------------------------------------------------------
-# 2. Eclipse Temurin 21 (Adoptium apt)
+# 3. Eclipse Temurin 21 (Adoptium apt)
 # ---------------------------------------------------------------------------
+step "Java 21 (Eclipse Temurin)"
 if java -version 2>&1 | grep -q 'version "21'; then
-  log "Java 21 は導入済み。スキップします。"
+  ok "Java 21 は導入済み: $(java -version 2>&1 | head -1)"
 else
-  log "Eclipse Temurin 21 を Adoptium apt から導入します..."
+  log "Adoptium GPG キーを登録..."
   install -d -m 0755 /etc/apt/keyrings
   curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
     | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg
   chmod a+r /etc/apt/keyrings/adoptium.gpg
   CODENAME="$(. /etc/os-release && echo "${VERSION_CODENAME:-jammy}")"
+  log "Adoptium リポジトリを追加 (codename: ${CODENAME})..."
   echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb ${CODENAME} main" \
     > /etc/apt/sources.list.d/adoptium.list
   apt-get update -qq
-  apt-get install -y -qq temurin-21-jdk
+  log "temurin-21-jdk を導入 (ダウンロードに少し時間がかかります)..."
+  apt-get install -y temurin-21-jdk
+  ok "導入完了: $(java -version 2>&1 | head -1)"
 fi
 
 # ---------------------------------------------------------------------------
-# 3. 専用ユーザーとディレクトリ
+# 4. 専用ユーザーとディレクトリ
 # ---------------------------------------------------------------------------
+step "専用ユーザーとディレクトリ"
 if ! id "$MC_USER" >/dev/null 2>&1; then
-  log "システムユーザー $MC_USER を作成します..."
   useradd --system --create-home --home-dir "$MC_DIR" --shell /usr/sbin/nologin "$MC_USER"
+  ok "システムユーザー $MC_USER を作成"
 else
-  log "ユーザー $MC_USER は既存。スキップします。"
+  ok "ユーザー $MC_USER は既存"
 fi
 install -d -o "$MC_USER" -g "$MC_USER" -m 0755 "$MC_DIR" "$MC_DIR/plugins"
+ok "ディレクトリ: $MC_DIR (plugins/ 含む)"
 
 # ---------------------------------------------------------------------------
-# 4. PaperMC (バージョン固定・ビルド自動解決)
+# 5. PaperMC (バージョン固定・ビルド自動解決)
 # ---------------------------------------------------------------------------
+step "PaperMC のダウンロード"
 if [ ! -f "$MC_DIR/paper.jar" ]; then
-  log "PaperMC $MC_VERSION の最新ビルドを解決しています..."
+  log "PaperMC $MC_VERSION の最新ビルドを PaperMC API で解決..."
   BUILDS_JSON="$(curl -fsSL "https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds")" \
     || die "PaperMC API へのアクセスに失敗。MC_VERSION=$MC_VERSION が存在するか確認してください。"
   PAPER_BUILD="$(echo "$BUILDS_JSON" | jq -r '.builds[-1].build')"
   PAPER_JAR="$(echo "$BUILDS_JSON" | jq -r '.builds[-1].downloads.application.name')"
   [ -n "$PAPER_BUILD" ] && [ "$PAPER_BUILD" != "null" ] || die "PaperMC ビルドの解決に失敗 (MC_VERSION=$MC_VERSION)。"
-  log "Paper $MC_VERSION build #$PAPER_BUILD をダウンロードします..."
-  run_as_mc "curl -fsSL 'https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds/${PAPER_BUILD}/downloads/${PAPER_JAR}' -o '$MC_DIR/paper.jar'"
+  ok "解決: build #$PAPER_BUILD ($PAPER_JAR)"
+  fetch_mc "https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds/${PAPER_BUILD}/downloads/${PAPER_JAR}" "$MC_DIR/paper.jar" "Paper $MC_VERSION build #$PAPER_BUILD"
+  ok "paper.jar 取得完了"
 else
-  log "paper.jar は既存。更新は update.sh を使用してください。スキップします。"
+  ok "paper.jar は既存。更新は update.sh を使用してください (スキップ)"
 fi
 
 # ---------------------------------------------------------------------------
-# 5. プラグイン (Geyser + Floodgate, latest)
+# 6. プラグイン (Geyser + Floodgate, latest)
 # ---------------------------------------------------------------------------
+step "プラグイン (Geyser / Floodgate)"
 if [ ! -f "$MC_DIR/plugins/Geyser-Spigot.jar" ]; then
-  log "GeyserMC (Spigot) をダウンロードします..."
-  run_as_mc "curl -fsSL 'https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot' -o '$MC_DIR/plugins/Geyser-Spigot.jar'"
+  fetch_mc "https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot" "$MC_DIR/plugins/Geyser-Spigot.jar" "GeyserMC (Spigot, latest)"
+  ok "Geyser-Spigot.jar 取得完了"
 else
-  log "Geyser-Spigot.jar は既存。スキップします。"
+  ok "Geyser-Spigot.jar は既存 (スキップ)"
 fi
 if [ ! -f "$MC_DIR/plugins/floodgate-spigot.jar" ]; then
-  log "Floodgate (Spigot) をダウンロードします..."
-  run_as_mc "curl -fsSL 'https://download.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/spigot' -o '$MC_DIR/plugins/floodgate-spigot.jar'"
+  fetch_mc "https://download.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/spigot" "$MC_DIR/plugins/floodgate-spigot.jar" "Floodgate (Spigot, latest)"
+  ok "floodgate-spigot.jar 取得完了"
 else
-  log "floodgate-spigot.jar は既存。スキップします。"
+  ok "floodgate-spigot.jar は既存 (スキップ)"
 fi
 
 # ---------------------------------------------------------------------------
-# 6. EULA
+# 7. EULA 同意 & メモリ設定 (環境ファイル)
 # ---------------------------------------------------------------------------
+step "EULA 同意 & メモリ設定"
 run_as_mc "echo 'eula=true' > '$MC_DIR/eula.txt'"
+ok "eula.txt を作成 (eula=true)"
 
-# ---------------------------------------------------------------------------
-# 7. メモリ算出と環境ファイル
-# ---------------------------------------------------------------------------
 TOTAL_GB="$(awk '/MemTotal/{print int($2/1024/1024)}' /proc/meminfo)"
 AUTO_GB="$(( TOTAL_GB * 3 / 4 ))"
 [ "$AUTO_GB" -lt 1 ] && AUTO_GB=1
 MEMORY_GB="${MEMORY:-$AUTO_GB}"
-log "ヒープサイズ: ${MEMORY_GB}G (総RAM ${TOTAL_GB}G)"
+ok "ヒープサイズ: ${MEMORY_GB}G (総RAM ${TOTAL_GB}G の約75%)"
 
 cat > "$ENV_FILE" <<EOF
 # Minecraft サーバー設定 (systemd EnvironmentFile)。update.sh からも参照されます。
@@ -150,10 +201,12 @@ MEMORY_GB=${MEMORY_GB}
 MC_DIR=${MC_DIR}
 MC_USER=${MC_USER}
 EOF
+ok "環境ファイルを書き込み: $ENV_FILE"
 
 # ---------------------------------------------------------------------------
 # 8. 起動スクリプト (run.sh): Aikar's Flags をヒープ規模で切替
 # ---------------------------------------------------------------------------
+step "起動スクリプト (run.sh) の生成"
 cat > "$MC_DIR/run.sh" <<'RUNEOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -188,18 +241,26 @@ exec java \
 RUNEOF
 chmod +x "$MC_DIR/run.sh"
 chown "$MC_USER":"$MC_USER" "$MC_DIR/run.sh"
+ok "run.sh を生成 (Xms=Xmx=${MEMORY_GB}G, Aikar's Flags)"
 
 # ---------------------------------------------------------------------------
 # 9. ブートストラップ起動 → 設定パッチ (初回のみ)
 # ---------------------------------------------------------------------------
+step "初回ブートストラップ & 設定パッチ"
 GEYSER_CFG="$MC_DIR/plugins/Geyser-Spigot/config.yml"
 if [ ! -f "$GEYSER_CFG" ] || [ ! -f "$MC_DIR/server.properties" ]; then
-  log "初回ブートストラップ起動 (設定ファイル生成)。数分かかります..."
-  run_as_mc "cd '$MC_DIR' && printf 'stop\n' | timeout 600 java -Xms1G -Xmx2G -jar paper.jar --nogui >/dev/null 2>&1" || true
+  log "サーバーを一度起動して設定ファイルを生成します (ワールド生成のため数分かかります)..."
+  BOOT_LOG="$MC_DIR/bootstrap.log"
+  run_as_mc "cd '$MC_DIR' && printf 'stop\n' | timeout 600 java -Xms1G -Xmx2G -jar paper.jar --nogui > '$BOOT_LOG' 2>&1" &
+  BOOT_PID=$!
+  wait_progress "$BOOT_LOG" "$BOOT_PID" "" || true
+  wait "$BOOT_PID" 2>/dev/null || true
+  rm -f "$BOOT_LOG"
 
   [ -f "$MC_DIR/server.properties" ] || die "ブートストラップで server.properties が生成されませんでした。ログを確認してください: $MC_DIR/logs/latest.log"
+  ok "設定ファイル生成完了"
 
-  log "設定をパッチします (white-list, auth-type: floodgate)..."
+  log "設定をパッチ: white-list=true / online-mode=true / auth-type=floodgate"
   set_prop() {
     local file=$1 key=$2 val=$3
     if grep -q "^${key}=" "$file"; then
@@ -214,23 +275,25 @@ if [ ! -f "$GEYSER_CFG" ] || [ ! -f "$MC_DIR/server.properties" ]; then
 
   if [ -f "$GEYSER_CFG" ]; then
     sed -i 's|^\( *auth-type:\).*|\1 floodgate|' "$GEYSER_CFG"
+    ok "Geyser auth-type を floodgate に設定"
   else
     warn "Geyser config.yml が見つかりません。auth-type のパッチをスキップしました。"
   fi
   chown -R "$MC_USER":"$MC_USER" "$MC_DIR"
+  ok "設定パッチ完了"
 else
-  log "設定ファイルは生成済み。ブートストラップとパッチをスキップします (既存設定を保護)。"
+  ok "設定ファイルは生成済み。ブートストラップとパッチをスキップ (既存設定を保護)"
 fi
 
 # ---------------------------------------------------------------------------
 # 10. systemd サービス
 # ---------------------------------------------------------------------------
+step "systemd サービスの設定"
 if [ -f "$SCRIPT_DIR/mc-console" ]; then
   install -m 0755 "$SCRIPT_DIR/mc-console" /usr/local/bin/mc-console
-  log "mc-console を /usr/local/bin に配置しました。"
+  ok "mc-console を /usr/local/bin に配置"
 fi
 
-log "systemd サービスを設定します..."
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
 Description=Minecraft Server (PaperMC + Geyser/Floodgate)
@@ -260,28 +323,25 @@ TimeoutStopSec=120
 [Install]
 WantedBy=multi-user.target
 EOF
+ok "unit を書き込み: /etc/systemd/system/${SERVICE_NAME}.service"
 
 systemctl daemon-reload
 systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 || true
-log "サーバーを起動します..."
+log "サーバーを起動 (systemctl restart ${SERVICE_NAME})..."
 systemctl restart "$SERVICE_NAME"
+ok "サービス起動を指示"
 
 # ---------------------------------------------------------------------------
 # 11. 起動待ち & whitelist/op
 # ---------------------------------------------------------------------------
-log "サーバーの起動完了を待っています..."
-DONE=0
-for _ in $(seq 1 120); do
-  if grep -q 'Done (' "$MC_DIR/logs/latest.log" 2>/dev/null; then DONE=1; break; fi
-  sleep 2
-done
-
-if [ "$DONE" -eq 1 ]; then
-  log "サーバー起動完了。"
+step "サーバー起動待ち & whitelist/op"
+log "起動完了 (Done) を待っています..."
+if wait_progress "$MC_DIR/logs/latest.log" "" 'Done ('; then
+  ok "サーバー起動完了"
   if [ -n "$ADMIN_PLAYER" ]; then
-    log "$ADMIN_PLAYER を whitelist 追加 + op します..."
     run_as_mc "tmux -L ${TMUX_SOCKET} send-keys -t ${TMUX_SESSION} 'whitelist add ${ADMIN_PLAYER}' Enter"
     run_as_mc "tmux -L ${TMUX_SOCKET} send-keys -t ${TMUX_SESSION} 'op ${ADMIN_PLAYER}' Enter"
+    ok "$ADMIN_PLAYER を whitelist 追加 + op"
   else
     warn "ADMIN_PLAYER 未指定。white-list=true のため、誰も参加できません。"
     warn "  mc-console で接続し 'whitelist add <名前>' を実行してください。"
@@ -293,20 +353,22 @@ fi
 # ---------------------------------------------------------------------------
 # 12. ファイアウォール (iptables)
 # ---------------------------------------------------------------------------
-log "iptables を設定します (Java ${JAVA_PORT}/tcp, Bedrock ${BEDROCK_PORT}/udp)..."
+step "ファイアウォール (iptables)"
 ensure_rule() {
   local proto=$1 port=$2
   if iptables -C INPUT -p "$proto" --dport "$port" -j ACCEPT 2>/dev/null; then
-    log "  既存ルール: ${proto}/${port}"
+    ok "既存ルール: ${proto}/${port}"
   else
     iptables -I INPUT -p "$proto" --dport "$port" -j ACCEPT
-    log "  追加: ${proto}/${port}"
+    ok "追加: ${proto}/${port}"
   fi
 }
 ensure_rule tcp "$JAVA_PORT"
 ensure_rule udp "$BEDROCK_PORT"
+log "ルールを永続化 (netfilter-persistent)..."
 netfilter-persistent save
 netfilter-persistent reload
+ok "iptables 設定完了"
 
 # ---------------------------------------------------------------------------
 # 完了メッセージ
@@ -315,7 +377,7 @@ PUBLIC_IP="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo '<
 cat <<EOF
 
 ============================================================
- セットアップ完了
+ セットアップ完了  (所要時間 $(_elapsed))
 ============================================================
 
  Java版接続    : ${PUBLIC_IP}:${JAVA_PORT}
