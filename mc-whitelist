@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+#
+# mc-whitelist — 起動中のサーバーに whitelist を追加して即反映する。
+# Java は Mojang UUID、Bedrock は XUID から Floodgate UUID を計算して
+# whitelist.json に書き、サーバーが起動中なら `whitelist reload` を送る。
+#
+# 使い方:
+#   sudo mc-whitelist <JavaName>       Java 版プレイヤーを追加
+#   sudo mc-whitelist -b <Gamertag>    Bedrock 版プレイヤー (Floodgate) を追加
+#
+# 反映は whitelist のみ。op はサーバー再起動が必要なため、必要なら setup.sh の
+# ADMIN_PLAYER / BEDROCK_PLAYER を使ってください。
+
+set -euo pipefail
+
+MC_USER="minecraft"
+MC_DIR="/opt/minecraft"
+if [ -r /etc/default/minecraft ]; then . /etc/default/minecraft; fi
+TMUX_SOCKET="minecraft"
+TMUX_SESSION="minecraft"
+
+BEDROCK=0
+if [ "${1:-}" = "-b" ]; then BEDROCK=1; shift; fi
+NAME="${1:-}"
+[ -n "$NAME" ] || { echo "使い方: sudo mc-whitelist [-b] <名前>" >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || { echo "root で実行してください: sudo mc-whitelist ..." >&2; exit 1; }
+
+if [ "$BEDROCK" -eq 1 ]; then
+  XUID="$(curl -fsSL "https://api.geysermc.org/v2/xbox/xuid/${NAME}" 2>/dev/null | jq -r '.xuid // empty')" || XUID=""
+  [ -n "$XUID" ] || { echo "Bedrock ゲーマータグの XUID を解決できません: $NAME" >&2; exit 1; }
+  HEX="$(printf '%016x' "$XUID")"
+  UUID="00000000-0000-0000-${HEX:0:4}-${HEX:4:12}"
+  ENTRY_NAME=".${NAME}"
+else
+  ID="$(curl -fsSL "https://api.mojang.com/users/profiles/minecraft/${NAME}" 2>/dev/null | jq -r '.id // empty')" || ID=""
+  [ "${#ID}" -eq 32 ] || { echo "Java 名の Mojang UUID を解決できません: $NAME" >&2; exit 1; }
+  UUID="${ID:0:8}-${ID:8:4}-${ID:12:4}-${ID:16:4}-${ID:20:12}"
+  ENTRY_NAME="$NAME"
+fi
+
+WL="$MC_DIR/whitelist.json"
+tmp="$(mktemp)"
+if [ -f "$WL" ] && jq -e . "$WL" >/dev/null 2>&1; then
+  jq --arg u "$UUID" --arg n "$ENTRY_NAME" 'map(select(.uuid != $u)) + [{uuid:$u,name:$n}]' "$WL" > "$tmp"
+else
+  jq -n --arg u "$UUID" --arg n "$ENTRY_NAME" '[{uuid:$u,name:$n}]' > "$tmp"
+fi
+mv "$tmp" "$WL"
+chown "$MC_USER":"$MC_USER" "$WL"
+echo "whitelist.json に追加: ${ENTRY_NAME}  (${UUID})"
+
+if sudo -u "$MC_USER" tmux -L "$TMUX_SOCKET" has-session -t "$TMUX_SESSION" 2>/dev/null; then
+  sudo -u "$MC_USER" tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" 'whitelist reload' Enter
+  echo "起動中のサーバーに 'whitelist reload' を送信しました(即反映)。"
+else
+  echo "サーバーは未起動です。次回起動時に反映されます。"
+fi

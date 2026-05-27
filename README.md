@@ -65,7 +65,16 @@ sudo systemctl stop    minecraft     # 停止(正常終了: コンソールに s
 sudo mc-console                      # コンソールにアタッチ(停止中なら起動してから。デタッチ: Ctrl-b → d)
 ```
 
-サーバーコマンド(`whitelist add <名前>`、`op <名前>` など)は `mc-console` で接続して入力します。ログは `/opt/minecraft/logs/latest.log`。
+サーバーコマンドは `mc-console` で接続して入力します。ログは `/opt/minecraft/logs/latest.log`。
+
+### 起動中に whitelist 追加
+
+```bash
+sudo mc-whitelist <JavaName>       # Java 版プレイヤー
+sudo mc-whitelist -b <Gamertag>    # Bedrock 版プレイヤー (Floodgate)
+```
+
+whitelist.json に追記して `whitelist reload` まで自動で行います(再起動不要)。Bedrock は Mojang プロフィールが無く `whitelist add <名前>` では追加できないため、このヘルパー(XUID→Floodgate UUID 計算)を使ってください。op はサーバー再起動が必要なため、必要なら setup.sh の `ADMIN_PLAYER` / `BEDROCK_PLAYER` を使います。
 
 > 完全に停止したいときは `systemctl stop` を使ってください。コンソールで `stop` を打つと `Restart=always` により自動再起動します。
 
@@ -94,6 +103,7 @@ OCI コンソール → ネットワーキング → VCN → サブネット →
 | `setup.sh` | 構築本体 |
 | `update.sh` | Paper / プラグインの最新化 |
 | `mc-console` | コンソールアタッチ + 停止中なら起動するヘルパー(`/usr/local/bin` に自動配置) |
+| `mc-whitelist` | 起動中に Java/Bedrock を whitelist 追加 + reload するヘルパー(`/usr/local/bin` に自動配置) |
 
 ## ライセンス
 

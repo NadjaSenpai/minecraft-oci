@@ -363,10 +363,12 @@ fi
 # 10. systemd サービス
 # ---------------------------------------------------------------------------
 step "systemd サービスの設定"
-if [ -f "$SCRIPT_DIR/mc-console" ]; then
-  install -m 0755 "$SCRIPT_DIR/mc-console" /usr/local/bin/mc-console
-  ok "mc-console を /usr/local/bin に配置"
-fi
+for helper in mc-console mc-whitelist; do
+  if [ -f "$SCRIPT_DIR/$helper" ]; then
+    install -m 0755 "$SCRIPT_DIR/$helper" "/usr/local/bin/$helper"
+    ok "$helper を /usr/local/bin に配置"
+  fi
+done
 
 cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
