@@ -8,7 +8,7 @@
 # 設定は環境変数で上書き可能 (例):
 #   ADMIN_PLAYER=YourName sudo -E ./setup.sh
 #
-#   MC_VERSION    Minecraft バージョン            (既定: 1.21.11)
+#   MC_VERSION    Minecraft バージョン            (既定: 26.1.2)
 #   ADMIN_PLAYER  whitelist 追加 + op する Java 名 (既定: 空 = 登録しない)
 #   MEMORY        ヒープサイズ(GB整数)            (既定: 総RAMの約75%)
 #   ACCEPT_EULA   Minecraft EULA への同意          (既定: true)
@@ -21,7 +21,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-MC_VERSION="${MC_VERSION:-1.21.11}"
+MC_VERSION="${MC_VERSION:-26.1.2}"
 ADMIN_PLAYER="${ADMIN_PLAYER:-}"
 ACCEPT_EULA="${ACCEPT_EULA:-true}"
 MC_USER="${MC_USER:-minecraft}"
@@ -32,6 +32,7 @@ TMUX_SOCKET="minecraft"
 TMUX_SESSION="minecraft"
 SERVICE_NAME="minecraft"
 ENV_FILE="/etc/default/minecraft"
+PAPER_UA="minecraft-oci (+https://github.com/NadjaSenpai/minecraft-oci)"
 
 STEP=0
 TOTAL_STEPS=12
@@ -51,6 +52,15 @@ run_as_mc() { sudo -u "$MC_USER" bash -c "$1"; }
 fetch_mc() {  # fetch_mc <url> <dest> <label>
   log "ダウンロード: $3"
   run_as_mc "curl -fL --progress-bar '$1' -o '$2'"
+}
+
+# PaperMC fill API の JSON を取得する。CDN(Cloudflare)が Content-Encoding: gzip を
+# 実体と不整合に返すことがあるため、curl に展開させず生で取得し、gzip なら自前で展開する。
+paper_meta() {  # paper_meta <url> -> JSON を stdout へ
+  local tmp; tmp="$(mktemp)"
+  if ! curl -fsSL -A "$PAPER_UA" "$1" -o "$tmp"; then rm -f "$tmp"; return 1; fi
+  if gzip -t "$tmp" 2>/dev/null; then gzip -dc "$tmp"; else cat "$tmp"; fi
+  rm -f "$tmp"
 }
 
 # 起動ログを監視し、ワールド生成の進捗と経過秒数をライブ表示する。
@@ -154,14 +164,15 @@ ok "ディレクトリ: $MC_DIR (plugins/ 含む)"
 # ---------------------------------------------------------------------------
 step "PaperMC のダウンロード"
 if [ ! -f "$MC_DIR/paper.jar" ]; then
-  log "PaperMC $MC_VERSION の最新ビルドを PaperMC API で解決..."
-  BUILDS_JSON="$(curl -fsSL "https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds")" \
+  log "PaperMC $MC_VERSION の最新ビルドを PaperMC API (v3 fill) で解決..."
+  PAPER_META="$(paper_meta "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}/builds/latest")" \
     || die "PaperMC API へのアクセスに失敗。MC_VERSION=$MC_VERSION が存在するか確認してください。"
-  PAPER_BUILD="$(echo "$BUILDS_JSON" | jq -r '.builds[-1].build')"
-  PAPER_JAR="$(echo "$BUILDS_JSON" | jq -r '.builds[-1].downloads.application.name')"
-  [ -n "$PAPER_BUILD" ] && [ "$PAPER_BUILD" != "null" ] || die "PaperMC ビルドの解決に失敗 (MC_VERSION=$MC_VERSION)。"
-  ok "解決: build #$PAPER_BUILD ($PAPER_JAR)"
-  fetch_mc "https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds/${PAPER_BUILD}/downloads/${PAPER_JAR}" "$MC_DIR/paper.jar" "Paper $MC_VERSION build #$PAPER_BUILD"
+  PAPER_BUILD="$(echo "$PAPER_META" | jq -r '.id')"
+  PAPER_URL="$(echo "$PAPER_META" | jq -r '.downloads."server:default".url')"
+  { [ -n "$PAPER_BUILD" ] && [ "$PAPER_BUILD" != "null" ] && [ -n "$PAPER_URL" ] && [ "$PAPER_URL" != "null" ]; } \
+    || die "PaperMC ビルドの解決に失敗 (MC_VERSION=$MC_VERSION)。"
+  ok "解決: build #$PAPER_BUILD"
+  fetch_mc "$PAPER_URL" "$MC_DIR/paper.jar" "Paper $MC_VERSION build #$PAPER_BUILD"
   ok "paper.jar 取得完了"
 else
   ok "paper.jar は既存。更新は update.sh を使用してください (スキップ)"

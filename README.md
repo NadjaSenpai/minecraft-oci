@@ -6,7 +6,7 @@ OCI Always Free の ARM インスタンス上に、**PaperMC + GeyserMC/Floodgat
 
 - **Eclipse Temurin 21** を Adoptium apt リポジトリから導入
 - 専用システムユーザー `minecraft` / `/opt/minecraft` で隔離実行
-- **PaperMC** はバージョンを固定しつつ、ビルド番号は PaperMC API で自動解決
+- **PaperMC** はバージョンを固定しつつ、ビルド番号は PaperMC API (v3 fill) で自動解決
 - **GeyserMC + Floodgate** でクロスプレイ(`auth-type: floodgate` を自動設定)
 - **systemd + tmux** 常駐(クラッシュ時自動再起動、コンソール操作可)
 - ヒープサイズは総 RAM の約 75% を自動算出、**Aikar's Flags** 適用
@@ -34,7 +34,7 @@ ADMIN_PLAYER=あなたのJava版ユーザー名 sudo -E ./setup.sh
 
 | 変数 | 既定値 | 説明 |
 |---|---|---|
-| `MC_VERSION` | `1.21.11` | Minecraft バージョン(ビルドは自動解決) |
+| `MC_VERSION` | `26.1.2` | Minecraft バージョン(ビルドは自動解決) |
 | `ADMIN_PLAYER` | (空) | `whitelist add` + `op` する Java 版ユーザー名 |
 | `MEMORY` | 総 RAM の約 75% | ヒープサイズ(GB 整数) |
 | `ACCEPT_EULA` | `true` | Minecraft EULA への同意 |
@@ -45,7 +45,7 @@ ADMIN_PLAYER=あなたのJava版ユーザー名 sudo -E ./setup.sh
 
 例:
 ```bash
-MC_VERSION=1.21.12 MEMORY=16 ADMIN_PLAYER=foo sudo -E ./setup.sh
+MC_VERSION=26.1.2 MEMORY=16 ADMIN_PLAYER=foo sudo -E ./setup.sh
 ```
 
 ## 運用
@@ -68,7 +68,7 @@ PaperMC とプラグインを最新化します(ワールド・設定は保護)�
 
 ```bash
 sudo ./update.sh                       # 同一バージョンの最新ビルドへ
-MC_VERSION=1.21.12 sudo -E ./update.sh # マイナーバージョン更新
+MC_VERSION=26.1.3 sudo -E ./update.sh # 別バージョンへ更新
 ```
 
 ## OCI 側のポート開放(別途必須)
