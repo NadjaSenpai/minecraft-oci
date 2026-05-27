@@ -253,25 +253,31 @@ if [ -t 0 ] && [ -e /dev/tty ]; then
   if [ -z "$_BEDROCK_SET" ];    then BEDROCK_PLAYER="$(_ask 'Bedrock版 管理者ゲーマータグ (whitelist+op、空=なし)' "$BEDROCK_PLAYER")"; fi
   if [ -z "$_MEMORY_SET" ];     then MEMORY="$(_ask 'ヒープGB (空=総RAMの約75%を自動)' '')"; fi
 
-  # level-seed: 後変更不可 (world 生成時のみ有効) なので、env 未指定 かつ world 未生成のときは常に尋ねる。
-  if [ -z "$_LEVEL_SEED_SET" ] && [ ! -d "$MC_DIR/world" ]; then
-    LEVEL_SEED="$(_ask 'ワールドのシード値 (空=ランダム)' "$LEVEL_SEED")"
-  fi
+  # ゲームプレイ設定の対話は「新規構築 (server.properties 未存在)」のときだけ。
+  # 既存インストールでは pre-write がスキップされ入力が反映されないため、mc-config へ誘導する。
+  if [ ! -f "$MC_DIR/server.properties" ]; then
+    # level-seed: 後変更不可 (world 生成時のみ有効) なので、env 未指定 かつ world 未生成のときは尋ねる。
+    if [ -z "$_LEVEL_SEED_SET" ] && [ ! -d "$MC_DIR/world" ]; then
+      LEVEL_SEED="$(_ask 'ワールドのシード値 (空=ランダム)' "$LEVEL_SEED")"
+    fi
 
-  # 詳細設定ゲート: y のときだけ未指定 (env 未設定) の 8 項目を尋ねる。
-  _detail="$(_ask '詳細設定をカスタマイズしますか? [y/N]' 'N')"
-  case "$_detail" in
-    y|Y|yes|Yes|YES)
-      if [ -z "$_MOTD_SET" ];       then MOTD="$(_ask 'サーバーの説明文 motd (& でカラーコード可、既定: A Minecraft Server)' "$MOTD")"; fi
-      if [ -z "$_DIFFICULTY_SET" ]; then DIFFICULTY="$(_ask_valid '難易度 peaceful/easy/normal/hard (既定: easy)' "$DIFFICULTY" valid_enum 'peaceful easy normal hard')"; fi
-      if [ -z "$_GAMEMODE_SET" ];   then GAMEMODE="$(_ask_valid 'ゲームモード survival/creative/adventure/spectator (既定: survival)' "$GAMEMODE" valid_enum 'survival creative adventure spectator')"; fi
-      if [ -z "$_MAX_PLAYERS_SET" ]; then MAX_PLAYERS="$(_ask_valid '最大同時接続人数 0以上の整数 (既定: 20)' "$MAX_PLAYERS" valid_int_range 0 2147483647)"; fi
-      if [ -z "$_PVP_SET" ];        then PVP="$(_ask_valid 'プレイヤー間戦闘 pvp true/false (既定: true)' "$PVP" valid_bool)"; fi
-      if [ -z "$_VIEW_DISTANCE_SET" ]; then VIEW_DISTANCE="$(_ask_valid '描画距離 (チャンク) 3〜32 (既定: 10)' "$VIEW_DISTANCE" valid_int_range 3 32)"; fi
-      if [ -z "$_SIMULATION_DISTANCE_SET" ]; then SIMULATION_DISTANCE="$(_ask_valid 'シミュレーション距離 (チャンク) 3〜32 (既定: 10)' "$SIMULATION_DISTANCE" valid_int_range 3 32)"; fi
-      if [ -z "$_HARDCORE_SET" ];   then HARDCORE="$(_ask_valid 'ハードコアモード true/false (既定: false)' "$HARDCORE" valid_bool)"; fi
-      ;;
-  esac
+    # 詳細設定ゲート: y のときだけ未指定 (env 未設定) の 8 項目を尋ねる。
+    _detail="$(_ask '詳細設定をカスタマイズしますか? [y/N]' 'N')"
+    case "$_detail" in
+      y|Y|yes|Yes|YES)
+        if [ -z "$_MOTD_SET" ];       then MOTD="$(_ask 'サーバーの説明文 motd (& でカラーコード可、既定: A Minecraft Server)' "$MOTD")"; fi
+        if [ -z "$_DIFFICULTY_SET" ]; then DIFFICULTY="$(_ask_valid '難易度 peaceful/easy/normal/hard (既定: easy)' "$DIFFICULTY" valid_enum 'peaceful easy normal hard')"; fi
+        if [ -z "$_GAMEMODE_SET" ];   then GAMEMODE="$(_ask_valid 'ゲームモード survival/creative/adventure/spectator (既定: survival)' "$GAMEMODE" valid_enum 'survival creative adventure spectator')"; fi
+        if [ -z "$_MAX_PLAYERS_SET" ]; then MAX_PLAYERS="$(_ask_valid '最大同時接続人数 0以上の整数 (既定: 20)' "$MAX_PLAYERS" valid_int_range 0 2147483647)"; fi
+        if [ -z "$_PVP_SET" ];        then PVP="$(_ask_valid 'プレイヤー間戦闘 pvp true/false (既定: true)' "$PVP" valid_bool)"; fi
+        if [ -z "$_VIEW_DISTANCE_SET" ]; then VIEW_DISTANCE="$(_ask_valid '描画距離 (チャンク) 3〜32 (既定: 10)' "$VIEW_DISTANCE" valid_int_range 3 32)"; fi
+        if [ -z "$_SIMULATION_DISTANCE_SET" ]; then SIMULATION_DISTANCE="$(_ask_valid 'シミュレーション距離 (チャンク) 3〜32 (既定: 10)' "$SIMULATION_DISTANCE" valid_int_range 3 32)"; fi
+        if [ -z "$_HARDCORE_SET" ];   then HARDCORE="$(_ask_valid 'ハードコアモード true/false (既定: false)' "$HARDCORE" valid_bool)"; fi
+        ;;
+    esac
+  else
+    printf '  \033[2m既存の server.properties を検出。ゲームプレイ設定の変更は mc-config を使ってください (例: sudo mc-config difficulty hard)。\033[0m\n' >/dev/tty
+  fi
   printf '\n' >/dev/tty
 fi
 
@@ -468,9 +474,12 @@ GEYSER_CFG="$MC_DIR/plugins/Geyser-Spigot/config.yml"
 # server.properties に key=val を upsert する (既存値は置換、無ければ追記)。
 # boot 前の先行書込と boot 後のパッチ双方で使うため、ループの外で定義する。
 set_prop() {
-  local file=$1 key=$2 val=$3
+  local file=$1 key=$2 val=$3 esc
   if grep -q "^${key}=" "$file"; then
-    sed -i "s|^${key}=.*|${key}=${val}|" "$file"
+    # 置換側を sed 置換文字列としてリテラル化する。motd の正規化値は "§" を含み、
+    # GNU sed の置換では \ がエスケープとして解釈され化けるため \ & | を退避する。
+    esc="${val//\\/\\\\}"; esc="${esc//&/\\&}"; esc="${esc//|/\\|}"
+    sed -i "s|^${key}=.*|${key}=${esc}|" "$file"
   else
     echo "${key}=${val}" >> "$file"
   fi
