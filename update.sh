@@ -84,7 +84,7 @@ ok "停止完了"
 # 2. Java の確認 (MC が要求する版を fill API から解決し、足りなければ導入)
 # ---------------------------------------------------------------------------
 step "Java の確認"
-JAVA_MIN="$(paper_meta "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}" 2>/dev/null | jq -r '.version.java.version.minimum // empty')"
+JAVA_MIN="$(paper_meta "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}" 2>/dev/null | jq -r '.version.java.version.minimum // empty')" || JAVA_MIN=""
 [ -n "$JAVA_MIN" ] || JAVA_MIN=21
 JAVA_BIN="$(ls -d /usr/lib/jvm/temurin-"${JAVA_MIN}"-jdk-*/bin/java 2>/dev/null | head -1 || true)"
 if [ -z "$JAVA_BIN" ] || [ ! -x "$JAVA_BIN" ]; then

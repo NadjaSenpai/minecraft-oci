@@ -63,6 +63,17 @@ paper_meta() {  # paper_meta <url> -> JSON を stdout へ
   rm -f "$tmp"
 }
 
+# JSON 配列ファイルにエントリを upsert (同じ uuid があれば置換、無ければ追加)。
+upsert_json() {  # upsert_json <file> <json-object>
+  local file="$1" obj="$2" tmp; tmp="$(mktemp)"
+  if [ -f "$file" ] && jq -e . "$file" >/dev/null 2>&1; then
+    jq --argjson e "$obj" 'map(select(.uuid != $e.uuid)) + [$e]' "$file" > "$tmp"
+  else
+    jq -n --argjson e "$obj" '[$e]' > "$tmp"
+  fi
+  mv "$tmp" "$file"
+}
+
 # 起動ログを監視し、ワールド生成の進捗と経過秒数をライブ表示する。
 # wait_progress <監視対象ログ> <PID または 空> <完了マーカー正規表現>
 #   PID 指定時はそのプロセスが終わるまで、完了マーカー指定時はマッチするまで監視する。
@@ -125,7 +136,7 @@ ok "依存パッケージ導入完了"
 # 3. Java (Eclipse Temurin) — MC バージョンが要求する版を fill API から自動選択
 # ---------------------------------------------------------------------------
 step "Java (Eclipse Temurin)"
-JAVA_MIN="$(paper_meta "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}" 2>/dev/null | jq -r '.version.java.version.minimum // empty')"
+JAVA_MIN="$(paper_meta "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}" 2>/dev/null | jq -r '.version.java.version.minimum // empty')" || JAVA_MIN=""
 [ -n "$JAVA_MIN" ] || JAVA_MIN=21
 ok "Minecraft $MC_VERSION が要求する Java: ${JAVA_MIN}"
 JAVA_BIN="$(ls -d /usr/lib/jvm/temurin-"${JAVA_MIN}"-jdk-*/bin/java 2>/dev/null | head -1 || true)"
@@ -306,6 +317,25 @@ else
   ok "設定ファイルは生成済み。ブートストラップとパッチをスキップ (既存設定を保護)"
 fi
 
+# 管理者を whitelist + op。コンソールへ送ると Done 直後は getLevel() が null で
+# NPE になるため、Mojang UUID を解決して whitelist.json / ops.json に直接書く。
+if [ -n "$ADMIN_PLAYER" ]; then
+  systemctl stop "$SERVICE_NAME" 2>/dev/null || true   # 起動中なら一旦止めてから書く
+  log "$ADMIN_PLAYER の UUID を Mojang API で解決..."
+  ADMIN_ID="$(curl -fsSL "https://api.mojang.com/users/profiles/minecraft/${ADMIN_PLAYER}" 2>/dev/null | jq -r '.id // empty')" || ADMIN_ID=""
+  if [ "${#ADMIN_ID}" -eq 32 ]; then
+    ADMIN_UUID="${ADMIN_ID:0:8}-${ADMIN_ID:8:4}-${ADMIN_ID:12:4}-${ADMIN_ID:16:4}-${ADMIN_ID:20:12}"
+    upsert_json "$MC_DIR/whitelist.json" "{\"uuid\":\"$ADMIN_UUID\",\"name\":\"$ADMIN_PLAYER\"}"
+    upsert_json "$MC_DIR/ops.json" "{\"uuid\":\"$ADMIN_UUID\",\"name\":\"$ADMIN_PLAYER\",\"level\":4,\"bypassesPlayerLimit\":false}"
+    chown "$MC_USER":"$MC_USER" "$MC_DIR/whitelist.json" "$MC_DIR/ops.json"
+    ok "$ADMIN_PLAYER を whitelist + op (UUID $ADMIN_UUID)"
+  else
+    warn "$ADMIN_PLAYER の UUID を解決できませんでした (名前を確認)。起動後に mc-console で 'whitelist add'/'op' してください。"
+  fi
+else
+  warn "ADMIN_PLAYER 未指定。white-list=true のため誰も参加できません。mc-console で 'whitelist add <名前>' を実行してください。"
+fi
+
 # ---------------------------------------------------------------------------
 # 10. systemd サービス
 # ---------------------------------------------------------------------------
@@ -355,18 +385,10 @@ ok "サービス起動を指示"
 # ---------------------------------------------------------------------------
 # 11. 起動待ち & whitelist/op
 # ---------------------------------------------------------------------------
-step "サーバー起動待ち & whitelist/op"
+step "サーバー起動待ち"
 log "起動完了 (Done) を待っています..."
 if wait_progress "$MC_DIR/logs/latest.log" "" 'Done ('; then
   ok "サーバー起動完了"
-  if [ -n "$ADMIN_PLAYER" ]; then
-    run_as_mc "tmux -L ${TMUX_SOCKET} send-keys -t ${TMUX_SESSION} 'whitelist add ${ADMIN_PLAYER}' Enter"
-    run_as_mc "tmux -L ${TMUX_SOCKET} send-keys -t ${TMUX_SESSION} 'op ${ADMIN_PLAYER}' Enter"
-    ok "$ADMIN_PLAYER を whitelist 追加 + op"
-  else
-    warn "ADMIN_PLAYER 未指定。white-list=true のため、誰も参加できません。"
-    warn "  mc-console で接続し 'whitelist add <名前>' を実行してください。"
-  fi
 else
   warn "起動完了を確認できませんでした。ログを確認してください: $MC_DIR/logs/latest.log"
 fi
