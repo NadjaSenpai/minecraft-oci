@@ -28,6 +28,12 @@
 #   MC_VERSION         Java 解決用の MC バージョン (既定: /etc/default/minecraft の値、無ければ 26.1.2)
 #   CLOUDFLARED_TOKEN  cloudflared トンネルトークン (空なら導入のみ・登録はスキップ)
 #   OLD_DIR            既存サーバーディレクトリ   (既定: /opt/minecraft)
+#
+# サブコマンド:
+#   sudo ./crafty-setup.sh migrate [UUID]
+#     先に Crafty UI で空サーバー(同じ Paper バージョン)を新規作成し、その UUID を渡すと、
+#     既存 $OLD_DIR の world / plugins / 設定を /var/opt/minecraft/server/<UUID>/ へ
+#     コピーする(PC を経由しないサーバー内移行)。UUID 省略時は対話で尋ねる。
 
 set -euo pipefail
 
@@ -79,6 +85,74 @@ env_upsert() {  # env_upsert <key> <value>
     echo "${key}=${val}" >> "$CRAFTY_MC_ENV"
   fi
 }
+
+# ---------------------------------------------------------------------------
+# サブコマンド: migrate — 既存サーバーを Crafty 作成済みサーバーへサーバー内移行する。
+#   使い方: sudo ./crafty-setup.sh migrate [UUID]
+#   先に Crafty UI で空サーバー(同じ Paper バージョン)を作成し、その UUID を渡す。
+#   /opt/minecraft の world / plugins / 設定を /var/opt/minecraft/server/<UUID>/ へコピー。
+# ---------------------------------------------------------------------------
+migrate_server() {  # migrate_server [uuid]
+  local uuid="${1:-}"
+  if [ -z "$uuid" ] && [ -t 0 ]; then
+    printf 'Crafty で作成したサーバーの UUID: '
+    IFS= read -r uuid || uuid=""
+  fi
+  [ -n "$uuid" ] || die "UUID が指定されていません。Crafty UI で空サーバーを作成し、その UUID を渡してください。"
+
+  local dst="/var/opt/minecraft/server/$uuid"
+  [ -d "$OLD_DIR" ] || die "移行元が見つかりません: $OLD_DIR"
+  [ -d "$dst" ]     || die "サーバーディレクトリが見つかりません: $dst (UUID を確認。Crafty UI で作成済みですか?)"
+
+  # 移行元の world 名を server.properties から解決 (既定 world)。
+  local level="world" ln
+  if [ -f "$OLD_DIR/server.properties" ]; then
+    ln="$(sed -n 's|^level-name=||p' "$OLD_DIR/server.properties" | head -1)"
+    [ -n "$ln" ] && level="$ln"
+  fi
+
+  # 旧サービスが残っていれば停止 (ファイル競合回避)。Crafty 側は UI で停止してもらう。
+  systemctl stop "$OLD_SERVICE" 2>/dev/null || true
+  warn "コピー先の Crafty サーバーは UI で『停止』しておいてください (稼働中だとファイル競合)。"
+  if [ -t 0 ]; then
+    printf '%s → %s へコピーします。続行しますか? [y/N]: ' "$OLD_DIR" "$dst"
+    local a; IFS= read -r a || a=""
+    case "$a" in y|Y|yes|Yes|YES) ;; *) die "中止しました。"; esac
+  fi
+
+  # world(全次元) / plugins / 設定 をコピー。-T で既存ディレクトリへネストせず統合する。
+  log "コピー中: world / plugins / 設定 → $dst"
+  local item
+  for item in "$level" "${level}_nether" "${level}_the_end" \
+              plugins server.properties whitelist.json ops.json \
+              banned-players.json banned-ips.json \
+              bukkit.yml spigot.yml paper.yml paper-global.yml paper-world-defaults.yml config; do
+    if [ -e "$OLD_DIR/$item" ]; then
+      cp -aT "$OLD_DIR/$item" "$dst/$item"
+      ok "コピー: $item"
+    fi
+  done
+  chown -R "$CRAFTY_USER":"$CRAFTY_USER" "$dst"
+  ok "サーバー内移行 完了: $dst"
+
+  cat <<EOF
+
+ 次の手順:
+   1. Crafty UI: このサーバーの Config → Java Path を Temurin の絶対パスに、
+      起動コマンドを Aikar's Flags に設定。
+   2. /etc/default/crafty-mc に記入:
+        SERVER_UUID  = $uuid
+        MC_DIR       = $dst
+        CRAFTY_TOKEN = (Crafty UI で発行した API トークン)
+   3. Crafty UI でサーバーを起動し、Java版/Bedrock版の接続を確認。
+EOF
+}
+
+if [ "${1:-}" = "migrate" ]; then
+  [ "$(id -u)" -eq 0 ] || die "root で実行してください (sudo ./crafty-setup.sh migrate [UUID])"
+  migrate_server "${2:-}"
+  exit 0
+fi
 
 # ---------------------------------------------------------------------------
 # 1. 事前チェック
@@ -250,10 +324,10 @@ step "インポート用 zip / 共有設定 / ヘルパ配置"
 # 9a. 既存 /opt/minecraft を Crafty 取り込み用に zip 化 (サービスは停止済みなので一貫)。
 if [ -d "$OLD_DIR" ] && [ -f "$OLD_DIR/paper.jar" ]; then
   install -d -o "$CRAFTY_USER" -g "$CRAFTY_USER" -m 0755 "$IMPORT_DIR"
-  log "$OLD_DIR を zip 化中 (Crafty のローカルインポート用)..."
+  log "$OLD_DIR を zip 化中 (小規模時の代替インポート用)..."
   ( cd "$OLD_DIR" && rm -f "$IMPORT_ZIP" && zip -rq "$IMPORT_ZIP" . -x 'logs/*' 'bootstrap.log' )
   chown "$CRAFTY_USER":"$CRAFTY_USER" "$IMPORT_ZIP"
-  ok "インポート用 zip を作成: $IMPORT_ZIP"
+  ok "代替用 zip を作成: $IMPORT_ZIP (基本は 'migrate' サブコマンドで移行。これは scp+UI アップロード用)"
 else
   warn "$OLD_DIR が見つからない/paper.jar 無し。インポート用 zip はスキップ (新規作成する場合は不要)。"
 fi
@@ -317,9 +391,10 @@ cat <<EOF
 
  [C] Crafty UI (https://crafty.nadja.jp、初回は default-creds.txt のパスワード)
    初回ログイン情報: sudo cat $CRAFTY_APP/app/config/default-creds.txt
-   1. Create a server → ローカル/アップロードの zip インポート:
-        $IMPORT_ZIP
-      → 'Select Root Dir' で paper.jar のある階層を root に。
+   1. Create a server → 空サーバーを新規作成 (Paper・同じバージョン・RAM)。UUID を控える。
+      → サーバー内で既存データを流し込む (PC 経由なし・推奨):
+           sudo ./crafty-setup.sh migrate <UUID>
+      (小規模なら代替: 上の $IMPORT_ZIP を scp で PC に落とし『Choose your Zip file』でアップロード)
    2. サーバーの Config → 'Java Path' に: $JAVA_BIN
       実行コマンドに Aikar's Flags を貼る (例):
         $JAVA_BIN -Xms<N>G -Xmx<N>G <Aikar flags...> -jar paper.jar --nogui

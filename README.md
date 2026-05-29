@@ -70,7 +70,13 @@ sudo apt-get update && sudo apt-get install -y git \
 
 初回ログイン情報: `sudo cat /var/opt/minecraft/crafty/crafty-4/app/config/default-creds.txt`
 
-1. **Create a server** → zip インポート(`crafty-setup.sh` が作成した `/var/opt/minecraft/import/opt-minecraft.zip`)。`Select Root Dir` で `paper.jar` のある階層を root に。
+1. **Create a server** → **空サーバーを新規作成**(Paper・同じバージョン・RAM)。**UUID を控える**。
+   → サーバー内で既存データを流し込む(PC 経由なし・推奨):
+     ```bash
+     sudo ./crafty-setup.sh migrate <UUID>
+     ```
+   `/opt/minecraft` の world / plugins / 設定を `/var/opt/minecraft/server/<UUID>/` へコピーします(`crafty` 所有)。
+   小規模なら代替として、`/var/opt/minecraft/import/opt-minecraft.zip` を `scp` で PC に落とし「Choose your Zip file」でアップロードしても可。
 2. サーバーの **Config → Java Path** に、手順3で表示された Temurin の絶対パスを設定。実行コマンドに **Aikar's Flags** を貼る(例: `… -Xms<N>G -Xmx<N>G <Aikar flags> -jar paper.jar --nogui`)。
 3. ユーザー設定で **API キー**(server 権限付き)を発行 → トークンを取得。
 4. `/etc/default/crafty-mc` の TODO を記入:
@@ -142,7 +148,7 @@ Java を昇格したら、Crafty UI の「Java Path」を表示された新パ�
 
 | ファイル | 役割 |
 |---|---|
-| `crafty-setup.sh` | ホスト準備(旧サービス停止・Crafty 導入・cloudflared・ポート開放・zip 化・ヘルパ配置) |
+| `crafty-setup.sh` | ホスト準備(旧サービス停止・Crafty 導入・cloudflared・ポート開放・zip 化・ヘルパ配置)。`migrate <UUID>` サブコマンドで `/opt/minecraft` → Crafty サーバーdir のサーバー内移行 |
 | `mc-config` | ゲームプレイ設定 8 項目を編集し Crafty API で即時反映 |
 | `mc-whitelist` | Java/Bedrock を whitelist 追加し Crafty コンソールで reload |
 | `mc-maintain` | Java 昇格 + Geyser/Floodgate 更新(Crafty が見ない維持作業) |
