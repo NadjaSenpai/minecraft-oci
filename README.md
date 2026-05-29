@@ -7,7 +7,7 @@ Minecraft サーバーを構築するスクリプト一式と、その上に乗�
 Web ダッシュボード(`dashboard/`)は、その制御プレーン(`systemctl`/tmux/`mc-*`)を叩くだけの
 **Go 単一バイナリ**で、公開は **Cloudflare Tunnel + Access**(管理ポートは晒さない)。
 
-> 設計の経緯は [`docs/plans/web-dashboard.md`](docs/plans/web-dashboard.md)。
+> 設計の経緯はローカルの `docs/plans/web-dashboard.md` に記録しています(リポジトリには含めません)。
 > 一度試した Crafty Controller 移行は [`crafty-attempt/`](crafty-attempt/) に保全しています(セットアップが煩雑だったため取りやめ)。
 
 ## 特徴
@@ -101,7 +101,7 @@ VM 内 iptables とは別に、OCI の VCN セキュリティリスト(または
 | `mc-whitelist` | Java/Bedrock の whitelist 追加 + reload |
 | `mc-backup` | world の整合バックアップ + 世代保持 |
 | `dashboard/` | Web ダッシュボード(Go daemon・埋め込み UI・systemd unit・sudoers・install.sh) |
-| `docs/plans/` | 設計プラン(`web-dashboard.md` / 参考: `crafty-migration.md`) |
+| `docs/plans/` | 設計プラン(`web-dashboard.md` 等)。ローカル専用・gitignore でリポジトリ外 |
 | `crafty-attempt/` | 取りやめた Crafty 移行一式の保全 |
 
 ## ライセンス
