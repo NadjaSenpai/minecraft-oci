@@ -72,6 +72,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/status", handleStatus)
+	mux.HandleFunc("GET /api/players", handlePlayers)
 	mux.HandleFunc("POST /api/power/{action}", handlePower)
 	mux.HandleFunc("GET /api/console/stream", handleConsoleStream)
 	mux.HandleFunc("POST /api/console", handleConsoleSend)
@@ -106,6 +107,23 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	out, _ := exec.Command("systemctl", "is-active", cfg.Service).Output()
 	state := strings.TrimSpace(string(out))
 	writeJSON(w, 200, map[string]any{"running": state == "active", "state": state})
+}
+
+func handlePlayers(w http.ResponseWriter, r *http.Request) {
+	port := 25565
+	if p, err := strconv.Atoi(readProps()["server-port"]); err == nil && p > 0 {
+		port = p
+	}
+	online, max, names, err := slpPlayers("127.0.0.1", port)
+	if err != nil {
+		// サーバー停止中など。UI 側で「—」表示にできるよう available:false で返す。
+		writeJSON(w, 200, map[string]any{"available": false, "online": 0, "max": 0, "players": []string{}})
+		return
+	}
+	if names == nil {
+		names = []string{}
+	}
+	writeJSON(w, 200, map[string]any{"available": true, "online": online, "max": max, "players": names})
 }
 
 func handlePower(w http.ResponseWriter, r *http.Request) {

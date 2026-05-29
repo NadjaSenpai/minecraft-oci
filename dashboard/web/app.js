@@ -216,6 +216,39 @@ $("#bk-run").addEventListener("click", async () => {
   }
 });
 
+// --- players -----------------------------------------------------------------
+
+async function loadPlayers() {
+  const box = $("#players");
+  const count = $("#players-count");
+  try {
+    const p = await api("GET", "/api/players");
+    if (!p.available) {
+      count.textContent = "(サーバー停止中)";
+      box.innerHTML = "";
+      return;
+    }
+    count.textContent = p.online + " / " + p.max;
+    box.innerHTML = "";
+    const names = p.players || [];
+    if (names.length === 0) {
+      const span = document.createElement("span");
+      span.className = "muted";
+      span.textContent = p.online > 0 ? "(名前サンプルなし)" : "誰もいません";
+      box.appendChild(span);
+      return;
+    }
+    names.forEach((n) => {
+      const chip = document.createElement("span");
+      chip.textContent = n;
+      chip.style.cssText = "background:#2f3340;border:1px solid #3a3f4d;border-radius:6px;padding:4px 10px;font-size:13px";
+      box.appendChild(chip);
+    });
+  } catch (e) {
+    count.textContent = "(取得失敗)";
+  }
+}
+
 // --- boot --------------------------------------------------------------------
 
 initConsole();
@@ -223,4 +256,6 @@ refreshStatus();
 loadConfig().catch((e) => toast(e.message, false));
 loadWhitelist().catch(() => {});
 loadBackups().catch(() => {});
+loadPlayers().catch(() => {});
 setInterval(refreshStatus, 5000);
+setInterval(loadPlayers, 10000);
