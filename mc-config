@@ -1,85 +1,41 @@
 #!/usr/bin/env bash
 #
-# mc-config (v2 / Crafty 版) — Minecraft サーバーのゲームプレイ設定 (server.properties) を
+# mc-config — Minecraft サーバーのゲームプレイ設定 (server.properties) を
 # 編集して反映する。対象は8項目: motd / difficulty / gamemode / max-players /
 # pvp / view-distance / simulation-distance / hardcore。
 # (level-seed は world 生成時に焼き込まれ後変更不可のため対象外。)
 #
-# v1 (tmux 版) との違いは「送信経路 / ファイルパス / 稼働判定」の3点だけ:
-#   送信経路 : tmux send-keys → Crafty console API (POST /servers/<uuid>/stdin、生ボディ)
-#   ファイル : /opt/minecraft → Crafty のサーバーディレクトリ ($MC_DIR、所有者 crafty)
-#   稼働判定 : tmux has-session → Crafty status API (.data.running)
-#   再起動   : systemctl restart → Crafty action API (restart_server)
-#
-# 反映方法は項目ごとに異なる:
+# 反映方法は項目ごとに異なる (Phase 0-C/E):
 #   difficulty : ファイル書込 + 稼働中ならコンソールに `difficulty <値>` を送り即反映。
 #   gamemode   : ファイル書込 + 稼働中ならコンソールに `defaultgamemode <値>` を送り即反映。
 #   pvp        : バージョン分岐。1.21.9+/26.x はゲームルール (`gamerule pvp <値>`、
 #                world 永続・server.properties キー無し)。≤1.21.8 はファイルキー (再起動要)。
 #   motd / max-players / view-distance / simulation-distance / hardcore:
 #                ファイル書込のみ。反映には再起動が必要。
+# (存在しないコマンド /motd /maxplayers /viewdistance などは送らない。Phase 0-E)
 #
 # 使い方:
 #   sudo mc-config                       現在値を一覧表示 (対話端末なら編集メニュー)
 #   sudo mc-config <key> <value>         指定キーを検証して反映
-#   sudo mc-config <key> <value> --restart  再起動要の変更を即時 Crafty restart で反映
+#   sudo mc-config <key> <value> --restart  再起動要の変更を即時 systemctl restart で反映
 #   sudo mc-config get <key>             指定キーの現在値を表示
 #
-# 設定は /etc/default/crafty-mc (crafty-setup.sh が生成、Crafty UI 後に手動記入) を参照。
+# motd は & のカラーコードを § (Java エスケープ) に変換して書き込みます。
 
 set -euo pipefail
 
-# --- Crafty 共有設定 ----------------------------------------------------------
-CRAFTY_MC_ENV="/etc/default/crafty-mc"
-[ -r "$CRAFTY_MC_ENV" ] || { printf '\033[1;31m✗ %s がありません。先に crafty-setup.sh を実行してください。\033[0m\n' "$CRAFTY_MC_ENV" >&2; exit 1; }
-# shellcheck disable=SC1090
-. "$CRAFTY_MC_ENV"
-CRAFTY_URL="${CRAFTY_URL:-https://127.0.0.1:8443}"
-CRAFTY_USER="${CRAFTY_USER:-crafty}"
-MC_VERSION="${MC_VERSION:-}"
-PROP="${MC_DIR:-}/server.properties"
+MC_USER="minecraft"
+MC_DIR="/opt/minecraft"
+if [ -r /etc/default/minecraft ]; then . /etc/default/minecraft; fi
+MC_USER="${MC_USER:-minecraft}"
+MC_DIR="${MC_DIR:-/opt/minecraft}"
+TMUX_SOCKET="minecraft"
+TMUX_SESSION="minecraft"
+SERVICE_NAME="minecraft"
+PROP="$MC_DIR/server.properties"
 
 # 編集対象の8キー (level-seed は対象外)。
 KEYS="motd difficulty gamemode max-players pvp view-distance simulation-distance hardcore"
-
-# --- ヘルパ (色付き出力) ------------------------------------------------------
-err()  { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; }
-note() { printf '  %s\n' "$*"; }
-
-# 共有設定の必須項目を検証する。TODO のままなら案内して exit。
-require_crafty_env() {
-  case "${CRAFTY_TOKEN:-}" in ''|TODO*) err "$CRAFTY_MC_ENV の CRAFTY_TOKEN が未記入です。Crafty UI で API トークンを発行して記入してください。"; exit 1;; esac
-  case "${SERVER_UUID:-}" in ''|TODO*) err "$CRAFTY_MC_ENV の SERVER_UUID が未記入です。インポートしたサーバーの UUID を記入してください。"; exit 1;; esac
-  case "${MC_DIR:-}" in ''|TODO*) err "$CRAFTY_MC_ENV の MC_DIR が未記入です (例: /var/opt/minecraft/server/<uuid>)。"; exit 1;; esac
-}
-
-# --- Crafty API --------------------------------------------------------------
-# Crafty は自己署名 HTTPS (-k)、認証は Authorization: Bearer。
-crafty_api() {  # crafty_api <METHOD> <path> [raw-body]  -> 応答ボディを stdout へ
-  local method=$1 path=$2 body="${3:-}"
-  if [ -n "$body" ]; then
-    curl -fsSL -k -X "$method" -H "Authorization: Bearer ${CRAFTY_TOKEN}" \
-      --data-binary "$body" "${CRAFTY_URL}/api/v2${path}"
-  else
-    curl -fsSL -k -X "$method" -H "Authorization: Bearer ${CRAFTY_TOKEN}" \
-      "${CRAFTY_URL}/api/v2${path}"
-  fi
-}
-
-# 起動中のサーバーコンソールにコマンドを送る (生ボディがコマンド・先頭スラッシュ無し)。
-console_send() {  # console_send <command-line>
-  crafty_api POST "/servers/${SERVER_UUID}/stdin" "$1" >/dev/null
-}
-
-# サーバーが起動中か (Crafty status API の .data.running)。
-server_running() {
-  crafty_api GET "/servers/${SERVER_UUID}/stats" 2>/dev/null | jq -e '.data.running == true' >/dev/null 2>&1
-}
-
-# Crafty にサーバー再起動を指示する。
-crafty_restart() {
-  crafty_api POST "/servers/${SERVER_UUID}/action/restart_server" >/dev/null
-}
 
 # --- バリデーション (setup.sh から複製。リポジトリ方針=スクリプト自己完結) -----------
 
@@ -92,7 +48,7 @@ valid_enum() {  # valid_enum <value> <allowed...(空白区切り)>  -> 一致す
 
 valid_int_range() {  # valid_int_range <value> <min> <max>  -> 整数かつ範囲内なら真
   local v=$1 min=$2 max=$3
-  case "$v" in ''|*[!0-9-]*) return 1;; esac
+  case "$v" in ''|*[!0-9-]*) return 1;; esac   # 数字 (と先頭の符号) 以外を含む
   case "$v" in -*) ;; *[!0-9]*) return 1;; esac
   [ "$v" -ge "$min" ] && [ "$v" -le "$max" ]
 }
@@ -101,26 +57,31 @@ valid_bool() {  # valid_bool <value>  -> true/false なら真
   case "$1" in true|false) return 0;; *) return 1;; esac
 }
 
-# motd を server.properties 用に正規化する (& カラーコード → § の Java エスケープ)。
+# motd を server.properties 用に正規化する。Phase 0-D: properties には生 § ではなく
+# Java エスケープの § を書く。プラグイン慣習の & カラーコードは § へ変換する。
 normalize_motd() {  # normalize_motd <value>  -> 変換後の文字列を stdout へ
   printf '%s' "${1//&/\\u00A7}"
 }
 
 # MC_VERSION がモダン (1.21.9 以上、または年次版でメジャー > 21) かを判定する。
+# Phase 0-E: pvp は 1.21.9+/26.x ではゲームルール、≤1.21.8 では server.properties キー。
+# Minecraft のバージョン体系は2系統: クラシック "1.21.9" (先頭=1) と年次版 "26.1.2" (先頭>21)。
 is_modern_mc() {  # is_modern_mc  -> モダンなら真
   local ver="${MC_VERSION:-}" major minor patch rest
   major="${ver%%.*}"
   case "$major" in ''|*[!0-9]*) return 1;; esac
+  # 先頭コンポーネント > 21 = 22/26 などの年次版 → モダン
   [ "$major" -gt 21 ] && return 0
+  # 先頭 == 1 = クラシック系。minor.patch を 1.21.9 と比較
   if [ "$major" -eq 1 ]; then
-    rest="${ver#*.}"
+    rest="${ver#*.}"               # "21.9" -> minor
     minor="${rest%%.*}"
     case "$minor" in ''|*[!0-9]*) minor=0;; esac
     [ "$minor" -gt 21 ] && return 0
     if [ "$minor" -eq 21 ]; then
-      patch="${rest#*.}"
+      patch="${rest#*.}"           # "9" / "9.x" などの後続
       patch="${patch%%.*}"
-      [ "$patch" = "$rest" ] && patch=0
+      [ "$patch" = "$rest" ] && patch=0   # "1.21" のように patch 無し
       case "$patch" in ''|*[!0-9]*) patch=0;; esac
       [ "$patch" -ge 9 ] && return 0
     fi
@@ -129,6 +90,10 @@ is_modern_mc() {  # is_modern_mc  -> モダンなら真
 }
 
 # server.properties に key=val を upsert する (既存値は置換、無ければ追記)。
+# setup.sh の set_prop を基にしているが、置換側 (val) を sed 置換文字列として
+# リテラル化している。motd の正規化値は "§" を含み、GNU sed の置換では \ が
+# エスケープ (\u=次字を大文字化) として解釈され "00A7" に化けてしまうため、
+# val 内の \ & | を退避してから置換する (Phase 0-D: § エスケープを正しく書く)。
 set_prop() {
   local file=$1 key=$2 val=$3 esc
   if grep -q "^${key}=" "$file"; then
@@ -141,6 +106,11 @@ set_prop() {
   fi
 }
 
+# --- ヘルパ -------------------------------------------------------------------
+
+err()  { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; }
+note() { printf '  %s\n' "$*"; }
+
 # server.properties から key の現在値を読む (無ければ空)。
 get_prop() {  # get_prop <key> -> 値を stdout へ
   local key=$1
@@ -148,8 +118,18 @@ get_prop() {  # get_prop <key> -> 値を stdout へ
   sed -n "s|^${key}=||p" "$PROP" | head -1
 }
 
-# 書込後の所有者補正 (Crafty が動かせるよう crafty 所有に保つ)。
-fix_owner() { chown "$CRAFTY_USER":"$CRAFTY_USER" "$PROP" 2>/dev/null || true; }
+# サーバー (tmux セッション) が起動中か。
+server_running() {
+  sudo -u "$MC_USER" tmux -L "$TMUX_SOCKET" has-session -t "$TMUX_SESSION" 2>/dev/null
+}
+
+# 起動中のサーバーコンソールにコマンドを送る (先頭スラッシュ無し・repo 慣習)。
+console_send() {  # console_send <command-line>
+  sudo -u "$MC_USER" tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" "$1" Enter
+}
+
+# 書込後の所有者補正。
+fix_owner() { chown "$MC_USER":"$MC_USER" "$PROP" 2>/dev/null || true; }
 
 # キーが対象8項目か検証。不正なら有効キー一覧を出して exit 1。
 require_known_key() {  # require_known_key <key>
@@ -191,7 +171,7 @@ validate_value() {  # validate_value <key> <value>
 }
 
 # 再起動要の変更後の処理。
-# - 稼働中 + 対話端末: y/N で確認、yes なら Crafty restart。
+# - 稼働中 + 対話端末: y/N で確認、yes なら systemctl restart。
 # - 稼働中 + 非対話: --restart 指定時のみ restart。それ以外は「次回起動時」案内。
 # - 未起動: 次回起動時に反映と案内。
 RESTART_FLAG=0
@@ -202,8 +182,8 @@ handle_restart() {  # handle_restart <key>
     return 0
   fi
   if [ "$RESTART_FLAG" -eq 1 ]; then
-    note "Crafty にサーバー再起動を指示して $key を反映します..."
-    crafty_restart
+    note "サーバーを再起動して $key を反映します..."
+    systemctl restart "$SERVICE_NAME"
     note "再起動を指示しました。"
     return 0
   fi
@@ -213,8 +193,8 @@ handle_restart() {  # handle_restart <key>
     IFS= read -r a || a=""
     case "$a" in
       y|Y|yes|Yes|YES)
-        note "Crafty にサーバー再起動を指示して $key を反映します..."
-        crafty_restart
+        note "サーバーを再起動して $key を反映します..."
+        systemctl restart "$SERVICE_NAME"
         note "再起動を指示しました。" ;;
       *)
         note "再起動しませんでした。$key は次回起動時に反映されます。" ;;
@@ -252,7 +232,7 @@ apply_key() {  # apply_key <key> <value>
       ;;
     pvp)
       if is_modern_mc; then
-        # モダン: ゲームルール。server.properties には書かない。
+        # モダン: ゲームルール。server.properties には書かない (Phase 0-E)。
         if server_running; then
           console_send "gamerule pvp $val"
           printf '\033[1;32m✓\033[0m ゲームルール pvp=%s を送信しました (world 永続)\n' "$val"
@@ -295,7 +275,7 @@ show_value() {  # show_value <key> -> 値を stdout へ
 print_table() {
   printf '\n\033[1m現在のゲームプレイ設定\033[0m  (%s)\n' "$PROP"
   if [ ! -f "$PROP" ]; then
-    note "server.properties が見つかりません ($PROP)。MC_DIR の記入とインポートを確認してください。"
+    note "server.properties がまだ存在しません ($PROP)。setup.sh 実行後に利用できます。"
   fi
   local key
   for key in $KEYS; do
@@ -332,7 +312,6 @@ interactive_menu() {
 # --- メイン -------------------------------------------------------------------
 
 [ "$(id -u)" -eq 0 ] || { err "root で実行してください: sudo mc-config ..."; exit 1; }
-require_crafty_env
 
 # --restart フラグを引数列から抜き出す (位置はどこでも可)。
 ARGS=()
@@ -343,6 +322,7 @@ set -- ${ARGS[@]+"${ARGS[@]}"}
 
 case "${1:-}" in
   "")
+    # 引数なし: 一覧 + (対話端末なら) 編集メニュー。
     print_table
     if [ -t 0 ]; then
       interactive_menu

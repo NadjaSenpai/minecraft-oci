@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+#
+# mc-backup — world のみを整合スナップショットで tar.gz 化し、世代保持する。
+#
+# 稼働中なら save-off + save-all flush で書き込みを止めてから tar し、save-on で戻す
+# (壊れないスナップショット)。world(level-name を解決し全次元)だけを対象にする。
+# plugins/configs は setup.sh で再現できるため対象外(world だけが代替不可能)。
+#
+# root でも minecraft ユーザー(ダッシュボード daemon)でも動く。
+#
+# 使い方:
+#   sudo mc-backup            world を backups/ に保存し、古い世代を削除
+#   KEEP=14 sudo mc-backup    保持世代数を上書き(既定 7)
+#
+# 設定は /etc/default/minecraft を参照。
+
+set -euo pipefail
+
+MC_USER="minecraft"
+MC_DIR="/opt/minecraft"
+if [ -r /etc/default/minecraft ]; then . /etc/default/minecraft; fi
+MC_USER="${MC_USER:-minecraft}"
+MC_DIR="${MC_DIR:-/opt/minecraft}"
+TMUX_SOCKET="minecraft"
+TMUX_SESSION="minecraft"
+KEEP="${KEEP:-7}"
+
+err() { printf '\033[1;31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
+log() { printf '  \033[1;32m•\033[0m %s\n' "$*"; }
+ok()  { printf '  \033[1;32m✓\033[0m %s\n' "$*"; }
+
+PROP="$MC_DIR/server.properties"
+BACKUP_DIR="$MC_DIR/backups"
+[ -d "$MC_DIR" ] || err "MC_DIR が見つかりません: $MC_DIR"
+
+# tmux を「現在ユーザーが minecraft ならそのまま、root なら sudo -u」で実行する。
+run_tmux() {  # run_tmux <tmux args...>
+  if [ "$(id -un)" = "$MC_USER" ]; then
+    tmux -L "$TMUX_SOCKET" "$@"
+  else
+    sudo -u "$MC_USER" tmux -L "$TMUX_SOCKET" "$@"
+  fi
+}
+server_running() { run_tmux has-session -t "$TMUX_SESSION" 2>/dev/null; }
+console_send()   { run_tmux send-keys -t "$TMUX_SESSION" "$1" Enter; }
+
+# level-name を server.properties から解決(既定 world)。
+LEVEL="world"
+if [ -f "$PROP" ]; then
+  _ln="$(sed -n 's|^level-name=||p' "$PROP" | head -1)"
+  [ -n "${_ln:-}" ] && LEVEL="$_ln"
+fi
+
+# 対象 world ディレクトリ(存在するものだけ)。
+DIRS=()
+for d in "$LEVEL" "${LEVEL}_nether" "${LEVEL}_the_end"; do
+  [ -d "$MC_DIR/$d" ] && DIRS+=("$d")
+done
+[ "${#DIRS[@]}" -gt 0 ] || err "world ディレクトリが見つかりません (level-name=$LEVEL, MC_DIR=$MC_DIR)"
+
+install -d "$BACKUP_DIR"
+TS="$(date +%Y%m%d-%H%M%S)"
+OUT="$BACKUP_DIR/world-${TS}.tar.gz"
+
+# 稼働中なら save-off + flush で整合を取る。
+RUNNING=0
+if server_running; then
+  RUNNING=1
+  log "save-off / save-all flush を送信(書き込みを一時停止)..."
+  console_send "save-off"
+  console_send "save-all flush"
+  sleep 3
+fi
+
+log "world を圧縮中: ${DIRS[*]} → $OUT"
+# 失敗しても必ず save-on を戻すため、tar の成否を退避する。
+set +e
+tar -czf "$OUT" -C "$MC_DIR" "${DIRS[@]}"
+rc=$?
+set -e
+
+if [ "$RUNNING" -eq 1 ]; then
+  log "save-on を送信(書き込みを再開)..."
+  console_send "save-on"
+fi
+
+[ "$rc" -eq 0 ] || { rm -f "$OUT"; err "tar に失敗しました (rc=$rc)"; }
+[ "$(id -u)" -eq 0 ] && chown "$MC_USER":"$MC_USER" "$OUT"
+ok "バックアップ作成: $OUT ($(du -h "$OUT" | cut -f1))"
+
+# 世代保持: 新しい順に KEEP 個を残し、古いものを削除。
+mapfile -t _all < <(ls -1t "$BACKUP_DIR"/world-*.tar.gz 2>/dev/null || true)
+if [ "${#_all[@]}" -gt "$KEEP" ]; then
+  for old in "${_all[@]:$KEEP}"; do
+    rm -f "$old"
+    log "古い世代を削除: $(basename "$old")"
+  done
+fi
+ok "保持世代: 最新 $KEEP 個"

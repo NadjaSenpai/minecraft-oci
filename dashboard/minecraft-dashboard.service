@@ -1,0 +1,20 @@
+[Unit]
+Description=Minecraft Dashboard (thin web layer over systemd + tmux + mc-*)
+After=network-online.target minecraft.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=minecraft
+Group=minecraft
+# MC_DIR / MC_USER / MC_VERSION を共有(setup.sh が書く)。先頭の - で不在でも起動。
+EnvironmentFile=-/etc/default/minecraft
+# localhost のみ bind。公開は Cloudflare Tunnel 経由(UI ポートは開けない)。
+Environment=DASHBOARD_LISTEN=127.0.0.1:8765
+ExecStart=/usr/local/bin/minecraft-dashboard
+Restart=always
+RestartSec=5
+# 注意: PrivateTmp は tmux ソケット (/tmp/tmux-<uid>/minecraft) 共有を壊すため有効化しないこと
+
+[Install]
+WantedBy=multi-user.target

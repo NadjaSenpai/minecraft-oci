@@ -1,159 +1,108 @@
 # minecraft-oci
 
-OCI Always Free の ARM インスタンス上で、**Crafty Controller(Web ダッシュボード)** から
-**PaperMC + GeyserMC/Floodgate** のクロスプレイ対応 Minecraft サーバーを運用するための構築スクリプト一式です。
+OCI Always Free の ARM インスタンス上に、**PaperMC + GeyserMC/Floodgate** のクロスプレイ対応
+Minecraft サーバーを構築するスクリプト一式と、その上に乗せる**軽量 Web ダッシュボード**です。
 
-サーバーの起動/停止・コンソール・ファイル編集・バックアップ・スケジュールは **Crafty** が担い、
-公開は **Cloudflare Tunnel + Access** 経由(管理画面のポートはインターネットに晒しません)。
-Crafty が持っていない「クロスプレイ維持(Bedrock whitelist・Geyser/Floodgate 更新・Java 昇格)」だけを
-薄い CLI ヘルパで補います。
+サーバー本体は **systemd + tmux** で常駐運用(クラッシュ自動再起動・コンソール操作可)。
+Web ダッシュボード(`dashboard/`)は、その制御プレーン(`systemctl`/tmux/`mc-*`)を叩くだけの
+**Go 単一バイナリ**で、公開は **Cloudflare Tunnel + Access**(管理ポートは晒さない)。
 
-> **設計の経緯**(なぜ Crafty を入れ、なぜ自作 Web や serverless にしなかったか)は
-> [`docs/plans/crafty-migration.md`](docs/plans/crafty-migration.md) に確証付きでまとめてあります。
-> 旧 systemd ベースの構築一式は [`legacy/`](legacy/) に温存しています。
+> 設計の経緯は [`docs/plans/web-dashboard.md`](docs/plans/web-dashboard.md)。
+> 一度試した Crafty Controller 移行は [`crafty-attempt/`](crafty-attempt/) に保全しています(セットアップが煩雑だったため取りやめ)。
 
 ## 特徴
 
-- **Web ダッシュボード** — Crafty Controller v4 が起動/停止・コンソール・ファイル管理・バックアップ・スケジュール・RBAC を提供。
-- **クロスプレイ** — Geyser + Floodgate を仕込んだ Paper サーバーをそのまま運用(Java 版・統合版が同じワールドへ)。
-- **ゼロ開放ポートで公開** — `cloudflared` で `localhost:8443` をトンネルし、`crafty.nadja.jp` を Cloudflare Access(SSO/メール認証)の背後に。UI ポートは開けません。
-- **ホスト Java を使用** — Crafty のサーバー設定「Java Path」に、ホストの Eclipse Temurin の絶対パスを指定。
-- **既存サーバーの移行** — 稼働中の `/opt/minecraft` を zip 化して Crafty にインポート(world・プラグイン・設定をそのまま)。
-- **維持ヘルパ** — `mc-config` / `mc-whitelist` / `mc-maintain` が Crafty API 経由で動作。
+- **Java 自動選択** — MC バージョンが要求する Eclipse Temurin を自動導入。
+- **PaperMC** — バージョン固定・ビルドは API で自動解決。
+- **クロスプレイ** — GeyserMC + Floodgate を導入し `auth-type: floodgate` まで自動設定。
+- **常駐運用** — systemd + tmux(クラッシュ時自動再起動、`mc-console` でコンソール操作)。
+- **Web ダッシュボード** — 起動/停止・ライブコンソール・設定編集・whitelist・バックアップをブラウザから。
+- **ゼロ開放ポートで公開** — `cloudflared` で `localhost` をトンネルし、Cloudflare Access で認証。
 
 ## 動作対象
 
-- OCI Always Free の **ARM64 (aarch64)** インスタンス
-- **Ubuntu 22.04 / 24.04 LTS**(Crafty 公式 installer の対応版)
-- root (sudo) で実行
+- OCI Always Free の **ARM64 (aarch64)** / **Ubuntu 22.04・24.04 LTS** / root (sudo) 実行。
 
 ## クイックスタート
 
-OCI の VM に SSH して、次でホスト準備を実行します(冪等・再実行可)。
-
 ```bash
+# 1) サーバー構築(対話 or 環境変数)
 sudo apt-get update && sudo apt-get install -y git \
   && git clone https://github.com/NadjaSenpai/minecraft-oci.git \
-  && cd minecraft-oci && sudo ./crafty-setup.sh
+  && cd minecraft-oci && sudo ./setup.sh
+
+# 2) Web ダッシュボード導入(任意)
+#    推奨: 手元で linux/arm64 にクロスコンパイルして単一バイナリを scp(箱に Go 不要)
+#      (cd dashboard && GOOS=linux GOARCH=arm64 go build -o minecraft-dashboard .)
+#      scp dashboard/minecraft-dashboard <oci>:~/minecraft-oci/dashboard/
+sudo ./dashboard/install.sh
 ```
 
-`crafty-setup.sh` が自動で行うこと:
+`setup.sh` の環境変数(抜粋): `MC_VERSION`(既定 26.1.2)/ `ADMIN_PLAYER` / `BEDROCK_PLAYER` /
+`MEMORY` / `JAVA_PORT`(25565)/ `BEDROCK_PORT`(19132)。ゲームプレイ設定(`MOTD`/`DIFFICULTY` 等)も
+初回構築時に対話 or 環境変数で投入でき、後から `mc-config` で変更します。
 
-1. 旧 `minecraft.service` を **停止 + 無効化**(Crafty がプロセスの持ち主になる)
-2. 依存パッケージの導入
-3. **Java (Temurin)** の確認/導入 — Crafty に貼る絶対パスを確定して表示
-4. **Crafty Controller v4** をネイティブ導入(公式 installer)
-5. `crafty.service` を有効化 + 起動
-6. **cloudflared** を導入(`CLOUDFLARED_TOKEN=...` を渡せばトンネルも自動登録)
-7. **MC ポート開放**(`25565/tcp` + `19132/udp` を iptables で永続化。UI `8443` は開けない)
-8. 既存 `/opt/minecraft` を **インポート用 zip** に固める
-9. 共有設定 `/etc/default/crafty-mc` の雛形 + ヘルパ配置
+## CLI ヘルパ(`/usr/local/bin` に自動配置)
 
-完了後、画面に表示される **一度きりの手動 runbook**(A/B/C)を実施します。
+```bash
+sudo systemctl {status,restart,stop} minecraft   # サービス操作
+sudo mc-console                                   # tmux コンソールにアタッチ (デタッチ: Ctrl-b → d)
+sudo mc-config                                    # ゲームプレイ設定8項目を一覧/編集
+sudo mc-whitelist <Java名>                        # whitelist 追加(Bedrock は -b <ゲーマータグ>)
+sudo mc-backup                                    # world を整合スナップショットで tar.gz(世代保持)
+sudo ./update.sh                                  # Paper / プラグイン / Java を最新化
+```
 
-### [A] Cloudflare Zero Trust(ダッシュボード)
+`mc-config` の対象8項目: `motd` / `difficulty` / `gamemode` / `max-players` / `pvp` /
+`view-distance` / `simulation-distance` / `hardcore`。`difficulty`/`gamemode`/`pvp`(1.21.9+/26.x の
+ゲームルール)は稼働中なら即反映、その他は再起動で反映(`--restart` で即時)。
 
-1. **Networks → Connectors → Cloudflare Tunnels → Create a tunnel**(Cloudflared)。表示される `cloudflared service install <TOKEN>` の TOKEN を控える(`sudo CLOUDFLARED_TOKEN=... ./crafty-setup.sh` で再実行すると自動登録)。
-2. **Public Hostname** を追加: `crafty.nadja.jp` → Service **HTTPS** / URL `localhost:8443` → *Additional application settings → TLS → No TLS Verify を ON*(自己署名証明書のため)。
-3. **Access controls → Applications → Self-hosted** に `crafty.nadja.jp` を登録 → ポリシー **Allow / Include / Emails =** あなたのメール。
+## Web ダッシュボード(`dashboard/`)
 
-### [B] OCI セキュリティリスト(OCI コンソール)
+`minecraft` ユーザーで動く Go 単一バイナリ。`127.0.0.1` のみ bind し、`systemctl` 操作だけ narrow
+sudoers(`/etc/sudoers.d/minecraft-dashboard`)で許可、それ以外は所有者として直接行います。
 
-ネットワーキング → VCN → サブネット → セキュリティリスト で **Ingress** を追加:
+| 機能 | 仕組み |
+|---|---|
+| 起動/停止/再起動 | `sudo systemctl {start,stop,restart} minecraft`(許可された3コマンドのみ) |
+| ライブコンソール | 出力=`latest.log` を **SSE で tail** / 入力=`tmux send-keys` |
+| 設定編集(8項目) | `server.properties` を直接編集(+稼働中はコンソールへ即反映)。`online-mode`/`white-list`/`auth-type` は保護のため対象外 |
+| whitelist | Java=Mojang UUID / Bedrock=XUID→Floodgate UUID を解決して追記 + `whitelist reload` |
+| バックアップ | `mc-backup`(world のみ・`save-off`/`save-all flush` で整合・世代保持)、一覧/DL |
+
+### 公開(Cloudflare Tunnel + Access)
+
+UI ポートは**開けません**。`cloudflared` で `localhost:8765`(既定)をトンネルします。
+
+1. Zero Trust でトンネル作成 → `cloudflared service install <TOKEN>`
+2. Public Hostname: `<dash>.nadja.jp` → Service **HTTP** / `localhost:8765`
+3. Access: Self-hosted app に `<dash>.nadja.jp` + ポリシー(Allow / Include / Emails)
+
+> ビルドには Go **1.22 以上**が必要(`net/http` の method+path ルーティングと `embed` を使用)。
+> 依存は標準ライブラリのみ。
+
+## OCI 側のポート開放(別途必須)
+
+VM 内 iptables とは別に、OCI の VCN セキュリティリスト(または NSG)で以下の Ingress を許可:
 
 - TCP `25565` — Java 版
 - UDP `19132` — Bedrock 版 / Geyser
 
-> UI ポート `8443` は **開けないこと**(Cloudflare Tunnel 経由のみ)。
-
-### [C] Crafty UI(`https://crafty.nadja.jp`)
-
-初回ログイン情報: `sudo cat /var/opt/minecraft/crafty/crafty-4/app/config/default-creds.txt`
-
-1. **Create a server** → **空サーバーを新規作成**(Paper・同じバージョン・RAM)。**UUID を控える**。
-   → サーバー内で既存データを流し込む(PC 経由なし・推奨):
-     ```bash
-     sudo ./crafty-setup.sh migrate <UUID>
-     ```
-   `/opt/minecraft` の world / plugins / 設定を `/var/opt/minecraft/crafty/crafty-4/servers/<UUID>/` へコピーします(`crafty` 所有)。
-   小規模なら代替として、`/var/opt/minecraft/import/opt-minecraft.zip` を `scp` で PC に落とし「Choose your Zip file」でアップロードしても可。
-2. サーバーの **Config → Java Path** に、手順3で表示された Temurin の絶対パスを設定。実行コマンドに **Aikar's Flags** を貼る(例: `… -Xms<N>G -Xmx<N>G <Aikar flags> -jar paper.jar --nogui`)。
-3. ユーザー設定で **API キー**(server 権限付き)を発行 → トークンを取得。
-4. `/etc/default/crafty-mc` の TODO を記入:
-   - `CRAFTY_TOKEN` = 発行したトークン
-   - `SERVER_UUID` = インポートしたサーバーの UUID
-   - `MC_DIR` = `/var/opt/minecraft/crafty/crafty-4/servers/<UUID>`
-5. **バックアップ(毎晩・7世代)/ クラッシュ自動再起動 / 定時再起動** を UI で設定。
-
-## 共有設定 `/etc/default/crafty-mc`
-
-ヘルパ 3 つが参照します。`crafty-setup.sh` が雛形を生成し、Crafty UI 後に手動で埋めます。
-
-| キー | 説明 |
-|---|---|
-| `CRAFTY_URL` | Crafty API のベース(既定 `https://127.0.0.1:8443`) |
-| `CRAFTY_TOKEN` | Crafty UI で発行した API トークン(Bearer) |
-| `SERVER_UUID` | Crafty 上のサーバー UUID |
-| `MC_DIR` | Crafty のサーバーディレクトリ(例 `/var/opt/minecraft/crafty/crafty-4/servers/<uuid>`) |
-| `CRAFTY_USER` | Crafty 実行ユーザー(既定 `crafty`) |
-| `MC_VERSION` / `JAVA_BIN` | Java 解決の参照値(`crafty-setup.sh` / `mc-maintain` が更新) |
-
-## ヘルパコマンド
-
-すべて root 実行、Crafty API 経由で反映します(`/usr/local/bin` に自動配置)。
-
-### `mc-config` — ゲームプレイ設定(8 項目)
-
-`motd` / `difficulty` / `gamemode` / `max-players` / `pvp` / `view-distance` / `simulation-distance` / `hardcore`。
-(`level-seed` は world 生成時に焼き込まれ後変更不可のため対象外。)
-
-```bash
-sudo mc-config                            # 現在値を一覧(端末なら編集メニュー)
-sudo mc-config difficulty hard            # 稼働中なら即反映(Crafty コンソールへ送信)
-sudo mc-config motd "&aWelcome"           # & カラーコードは § に変換
-sudo mc-config max-players 30 --restart   # 再起動要の項目を Crafty 経由で即時反映
-sudo mc-config get view-distance
-```
-
-- **稼働中に即反映**: `difficulty` / `gamemode` / `pvp`(1.21.9+/26.x のゲームルール経路)。
-- **再起動が必要**: `motd` / `max-players` / `view-distance` / `simulation-distance` / `hardcore`(と 1.21.8 以下の `pvp`)。`--restart` で Crafty にサーバー再起動を指示。
-
-### `mc-whitelist` — クロスプレイ whitelist
-
-```bash
-sudo mc-whitelist <JavaName>       # Java 版(Mojang UUID)
-sudo mc-whitelist -b <Gamertag>    # Bedrock 版(XUID → Floodgate UUID)
-```
-
-`whitelist.json` に追記し、稼働中なら Crafty コンソールへ `whitelist reload` を送って即反映します。
-Bedrock は Crafty の whitelist UI で扱えないため、このヘルパを使います。
-
-### `mc-maintain` — Java 昇格 + プラグイン更新
-
-```bash
-sudo mc-maintain               # 必要 Java を導入 + Geyser/Floodgate を latest に
-sudo mc-maintain --restart     # 上記後、Crafty にサーバー再起動を指示
-```
-
-Paper 本体の更新と起動/停止は **Crafty が担当**します(`mc-maintain` は行いません)。
-Java を昇格したら、Crafty UI の「Java Path」を表示された新パスに更新してください。
-
-## 運用(Crafty UI / API)
-
-- 起動/停止/再起動・コンソール・ファイル編集・バックアップ・スケジュールは Crafty UI から。
-- クラッシュ時の自動復帰は Crafty のサーバー設定で有効化。
-- ログも Crafty UI のコンソール/ログタブで確認できます。
+(ダッシュボードの UI ポートは開けないこと。Cloudflare Tunnel 経由のみ。)
 
 ## ファイル構成
 
-| ファイル | 役割 |
+| パス | 役割 |
 |---|---|
-| `crafty-setup.sh` | ホスト準備(旧サービス停止・Crafty 導入・cloudflared・ポート開放・zip 化・ヘルパ配置)。`migrate <UUID>` サブコマンドで `/opt/minecraft` → Crafty サーバーdir のサーバー内移行 |
-| `mc-config` | ゲームプレイ設定 8 項目を編集し Crafty API で即時反映 |
-| `mc-whitelist` | Java/Bedrock を whitelist 追加し Crafty コンソールで reload |
-| `mc-maintain` | Java 昇格 + Geyser/Floodgate 更新(Crafty が見ない維持作業) |
-| `docs/plans/crafty-migration.md` | 設計と確証(Phase 0)・実装フェーズ |
-| `legacy/` | 旧 systemd ベースの構築一式(`setup.sh` / `update.sh` / `mc-console` / 旧 `mc-config` / 旧 `mc-whitelist`) |
+| `setup.sh` | サーバー構築(systemd + tmux + Geyser/Floodgate) |
+| `update.sh` | Paper / プラグイン / Java の最新化 |
+| `mc-console` | tmux コンソールにアタッチ |
+| `mc-config` | ゲームプレイ設定8項目の編集 |
+| `mc-whitelist` | Java/Bedrock の whitelist 追加 + reload |
+| `mc-backup` | world の整合バックアップ + 世代保持 |
+| `dashboard/` | Web ダッシュボード(Go daemon・埋め込み UI・systemd unit・sudoers・install.sh) |
+| `docs/plans/` | 設計プラン(`web-dashboard.md` / 参考: `crafty-migration.md`) |
+| `crafty-attempt/` | 取りやめた Crafty 移行一式の保全 |
 
 ## ライセンス
 

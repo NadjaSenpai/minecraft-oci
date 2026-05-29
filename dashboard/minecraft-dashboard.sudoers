@@ -1,0 +1,4 @@
+# /etc/sudoers.d/minecraft-dashboard
+# ダッシュボード (minecraft ユーザーで実行) に、MC サービスの操作だけを許可する。
+# これ以外の昇格は与えない(最小権限)。実体パスは Ubuntu の /usr/bin/systemctl。
+minecraft ALL=(root) NOPASSWD: /usr/bin/systemctl start minecraft, /usr/bin/systemctl stop minecraft, /usr/bin/systemctl restart minecraft
