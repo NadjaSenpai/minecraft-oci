@@ -65,7 +65,7 @@ minecraft-oci/
 CRAFTY_URL=https://127.0.0.1:8443
 CRAFTY_TOKEN=<UIで発行した Bearer>
 SERVER_UUID=<インポートしたサーバーの UUID>
-MC_DIR=/var/opt/minecraft/server/<uuid>   # Crafty が展開したサーバーディレクトリ
+MC_DIR=/var/opt/minecraft/crafty/crafty-4/servers/<uuid>   # Crafty が展開したサーバーディレクトリ
 ```
 
 ---
@@ -87,9 +87,10 @@ MC_DIR=/var/opt/minecraft/server/<uuid>   # Crafty が展開したサーバー�
 ### 2. インポート挙動 — ✅確証（重要）
 
 - **ZIP のみ**（ブラウザアップロード or ローカル zip）。**in-place 参照は不可**。`import_helper.py` が `unzip_file()` で **新ディレクトリへ展開（コピー）**。
-- 取り込み後の実体: **`/var/opt/minecraft/server/<server_uuid>/`**、所有者 **`crafty:crafty`**。元の `/opt/minecraft` は無改変。
+- 取り込み後の実体: **`/var/opt/minecraft/crafty/crafty-4/servers/<server_uuid>/`**(= アプリ配下 `crafty-4/servers/`)、所有者 **`crafty:crafty`**。元の `/opt/minecraft` は無改変。
+  - ※ 当初 (c) は `/var/opt/minecraft/server/<uuid>` と推測したが、**実機確認で `crafty-4/servers/` 配下が正**と判明し訂正(2026-05-29)。
 - world / `plugins/`（Geyser・floodgate）/ server.properties / Geyser config.yml / whitelist.json は**展開で保持**。「Select Root Dir」で server root を選ぶ。
-- → **`MC_DIR` = `/var/opt/minecraft/server/<uuid>`**。ヘルパは**この新パスへ `crafty` 所有で**書く（旧 `/opt/minecraft` ではない）。
+- → **`MC_DIR` = `/var/opt/minecraft/crafty/crafty-4/servers/<uuid>`**。ヘルパは**この新パスへ `crafty` 所有で**書く（旧 `/opt/minecraft` ではない）。
 
 ### 3. Java Path / 起動コマンド — ✅確証
 

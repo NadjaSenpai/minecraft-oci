@@ -75,14 +75,14 @@ sudo apt-get update && sudo apt-get install -y git \
      ```bash
      sudo ./crafty-setup.sh migrate <UUID>
      ```
-   `/opt/minecraft` の world / plugins / 設定を `/var/opt/minecraft/server/<UUID>/` へコピーします(`crafty` 所有)。
+   `/opt/minecraft` の world / plugins / 設定を `/var/opt/minecraft/crafty/crafty-4/servers/<UUID>/` へコピーします(`crafty` 所有)。
    小規模なら代替として、`/var/opt/minecraft/import/opt-minecraft.zip` を `scp` で PC に落とし「Choose your Zip file」でアップロードしても可。
 2. サーバーの **Config → Java Path** に、手順3で表示された Temurin の絶対パスを設定。実行コマンドに **Aikar's Flags** を貼る(例: `… -Xms<N>G -Xmx<N>G <Aikar flags> -jar paper.jar --nogui`)。
 3. ユーザー設定で **API キー**(server 権限付き)を発行 → トークンを取得。
 4. `/etc/default/crafty-mc` の TODO を記入:
    - `CRAFTY_TOKEN` = 発行したトークン
    - `SERVER_UUID` = インポートしたサーバーの UUID
-   - `MC_DIR` = `/var/opt/minecraft/server/<UUID>`
+   - `MC_DIR` = `/var/opt/minecraft/crafty/crafty-4/servers/<UUID>`
 5. **バックアップ(毎晩・7世代)/ クラッシュ自動再起動 / 定時再起動** を UI で設定。
 
 ## 共有設定 `/etc/default/crafty-mc`
@@ -94,7 +94,7 @@ sudo apt-get update && sudo apt-get install -y git \
 | `CRAFTY_URL` | Crafty API のベース(既定 `https://127.0.0.1:8443`) |
 | `CRAFTY_TOKEN` | Crafty UI で発行した API トークン(Bearer) |
 | `SERVER_UUID` | Crafty 上のサーバー UUID |
-| `MC_DIR` | Crafty のサーバーディレクトリ(例 `/var/opt/minecraft/server/<uuid>`) |
+| `MC_DIR` | Crafty のサーバーディレクトリ(例 `/var/opt/minecraft/crafty/crafty-4/servers/<uuid>`) |
 | `CRAFTY_USER` | Crafty 実行ユーザー(既定 `crafty`) |
 | `MC_VERSION` / `JAVA_BIN` | Java 解決の参照値(`crafty-setup.sh` / `mc-maintain` が更新) |
 

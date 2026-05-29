@@ -32,7 +32,7 @@
 # サブコマンド:
 #   sudo ./crafty-setup.sh migrate [UUID]
 #     先に Crafty UI で空サーバー(同じ Paper バージョン)を新規作成し、その UUID を渡すと、
-#     既存 $OLD_DIR の world / plugins / 設定を /var/opt/minecraft/server/<UUID>/ へ
+#     既存 $OLD_DIR の world / plugins / 設定を /var/opt/minecraft/crafty/crafty-4/servers/<UUID>/ へ
 #     コピーする(PC を経由しないサーバー内移行)。UUID 省略時は対話で尋ねる。
 
 set -euo pipefail
@@ -90,7 +90,7 @@ env_upsert() {  # env_upsert <key> <value>
 # サブコマンド: migrate — 既存サーバーを Crafty 作成済みサーバーへサーバー内移行する。
 #   使い方: sudo ./crafty-setup.sh migrate [UUID]
 #   先に Crafty UI で空サーバー(同じ Paper バージョン)を作成し、その UUID を渡す。
-#   /opt/minecraft の world / plugins / 設定を /var/opt/minecraft/server/<UUID>/ へコピー。
+#   /opt/minecraft の world / plugins / 設定を /var/opt/minecraft/crafty/crafty-4/servers/<UUID>/ へコピー。
 # ---------------------------------------------------------------------------
 migrate_server() {  # migrate_server [uuid]
   local uuid="${1:-}"
@@ -100,7 +100,7 @@ migrate_server() {  # migrate_server [uuid]
   fi
   [ -n "$uuid" ] || die "UUID が指定されていません。Crafty UI で空サーバーを作成し、その UUID を渡してください。"
 
-  local dst="/var/opt/minecraft/server/$uuid"
+  local dst="/var/opt/minecraft/crafty/crafty-4/servers/$uuid"
   [ -d "$OLD_DIR" ] || die "移行元が見つかりません: $OLD_DIR"
   [ -d "$dst" ]     || die "サーバーディレクトリが見つかりません: $dst (UUID を確認。Crafty UI で作成済みですか?)"
 
@@ -344,7 +344,7 @@ JAVA_BIN=${JAVA_BIN}
 # === 要記入 (Crafty UI 後) ===
 CRAFTY_TOKEN=TODO_paste_api_token_here
 SERVER_UUID=TODO_paste_server_uuid_here
-MC_DIR=TODO_e.g_/var/opt/minecraft/server/<uuid>
+MC_DIR=TODO_e.g_/var/opt/minecraft/crafty/crafty-4/servers/<uuid>
 EOF
   chmod 600 "$CRAFTY_MC_ENV"
   ok "共有設定の雛形を生成: $CRAFTY_MC_ENV (CRAFTY_TOKEN / SERVER_UUID / MC_DIR は手動記入)"
@@ -402,7 +402,7 @@ cat <<EOF
    4. $CRAFTY_MC_ENV の TODO を記入:
         CRAFTY_TOKEN = 発行したトークン
         SERVER_UUID  = インポートしたサーバーの UUID
-        MC_DIR       = /var/opt/minecraft/server/<UUID>
+        MC_DIR       = /var/opt/minecraft/crafty/crafty-4/servers/<UUID>
    5. バックアップ(毎晩7世代) / クラッシュ自動再起動 / 定時再起動 を UI で設定。
 
  記入後の動作確認:
