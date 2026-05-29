@@ -23,3 +23,6 @@ GEMINI.md
 
 # Logs / runtime artifacts
 *.log
+
+# Docs (local only)
+docs/
