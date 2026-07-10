@@ -77,10 +77,15 @@ cat <<EOF
  ローカル確認: curl -s http://127.0.0.1:${DASH_PORT}/api/status
 
  公開 (Cloudflare Tunnel + Access、UI ポートは開けない):
-   1. cloudflared を導入し、Zero Trust でトンネル作成 →
+   0. cloudflared 未導入なら (Ubuntu/ARM64):
+        curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-main.gpg
+        echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared \$(lsb_release -cs) main" \\
+          | sudo tee /etc/apt/sources.list.d/cloudflared.list
+        sudo apt-get update && sudo apt-get install -y cloudflared
+   1. Zero Trust でトンネル作成 →
         cloudflared service install <TOKEN>
-   2. Public Hostname: <dash>.nadja.jp → Service HTTP, URL http://localhost:${DASH_PORT}
-   3. Access: Self-hosted app に <dash>.nadja.jp + Allow/Include/Emails ポリシー
+   2. Public Hostname: dash.example.com → Service HTTP, URL http://localhost:${DASH_PORT}
+   3. Access: Self-hosted app に dash.example.com + Allow/Include/Emails ポリシー
 
  状態確認: systemctl status minecraft-dashboard
  ログ:     journalctl -u minecraft-dashboard -f

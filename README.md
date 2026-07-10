@@ -76,9 +76,16 @@ sudoers(`/etc/sudoers.d/minecraft-dashboard`)で許可、それ以外は所有�
 
 UI ポートは**開けません**。`cloudflared` で `localhost:8765`(既定)をトンネルします。
 
+0. cloudflared 未導入なら先に入れる(Ubuntu / ARM64):
+   ```bash
+   curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo gpg --dearmor -o /usr/share/keyrings/cloudflare-main.gpg
+   echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" \
+     | sudo tee /etc/apt/sources.list.d/cloudflared.list
+   sudo apt-get update && sudo apt-get install -y cloudflared
+   ```
 1. Zero Trust でトンネル作成 → `cloudflared service install <TOKEN>`
-2. Public Hostname: `<dash>.nadja.jp` → Service **HTTP** / `localhost:8765`
-3. Access: Self-hosted app に `<dash>.nadja.jp` + ポリシー(Allow / Include / Emails)
+2. Public Hostname: `dash.example.com` → Service **HTTP** / `localhost:8765`
+3. Access: Self-hosted app に `dash.example.com` + ポリシー(Allow / Include / Emails)
 
 > ビルドには Go **1.22 以上**が必要(`net/http` の method+path ルーティングと `embed` を使用)。
 > 依存は標準ライブラリのみ。
