@@ -561,9 +561,18 @@ if [ ! -f "$GEYSER_CFG" ] || [ ! -f "$MC_DIR/server.properties" ]; then
 
   log "サーバーを一度起動して設定ファイルを生成します (ワールド生成のため数分かかります)..."
   BOOT_LOG="$MC_DIR/bootstrap.log"
-  run_as_mc "cd '$MC_DIR' && printf 'stop\n' | timeout 600 '$JAVA_BIN' -Xms1G -Xmx2G -jar paper.jar --nogui > '$BOOT_LOG' 2>&1" &
+  # 起動直後に "stop" をコンソール標準入力へ流す方式は、Paper 26.x の初回起動直後
+  # (Done 直後) は CommandSourceStack.getLevel() が null で NullPointerException と
+  # なり停止コマンドが失敗し、timeout 600 で強制終了されるまでハングして見える。
+  # SIGTERM は JVM のシャットダウンフック (ワールド保存を含む正常停止) を呼ぶだけで
+  # コマンドディスパッチを経由しないため、この NPE を回避できる。
+  run_as_mc "cd '$MC_DIR' && timeout 600 '$JAVA_BIN' -Xms1G -Xmx2G -jar paper.jar --nogui > '$BOOT_LOG' 2>&1" &
   BOOT_PID=$!
-  wait_progress "$BOOT_LOG" "$BOOT_PID" "" || true
+  wait_progress "$BOOT_LOG" "" 'Done (' || true
+  BOOT_JAVA_PID="$(pgrep -u "$MC_USER" -f 'paper.jar --nogui' | head -1)"
+  if [ -n "$BOOT_JAVA_PID" ]; then
+    kill -TERM "$BOOT_JAVA_PID" 2>/dev/null || true
+  fi
   wait "$BOOT_PID" 2>/dev/null || true
   rm -f "$BOOT_LOG"
 
