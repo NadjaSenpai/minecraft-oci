@@ -53,6 +53,7 @@ sudo mc-config                                    # ゲームプレイ設定8項
 sudo mc-whitelist <Java名>                        # whitelist 追加(Bedrock は -b <ゲーマータグ>)
 sudo mc-backup                                    # world を整合スナップショットで tar.gz(世代保持)
 sudo ./update.sh                                  # Paper / プラグイン / Java を最新化
+sudo ./uninstall.sh                               # 完全アンインストール(world 含む。要確認)
 ```
 
 `mc-config` の対象8項目: `motd` / `difficulty` / `gamemode` / `max-players` / `pvp` /
@@ -105,6 +106,7 @@ VM 内 iptables とは別に、OCI の VCN セキュリティリスト(または
 |---|---|
 | `setup.sh` | サーバー構築(systemd + tmux + Geyser/Floodgate) |
 | `update.sh` | Paper / プラグイン / Java の最新化 |
+| `uninstall.sh` | 完全アンインストール(world 含む。バックアップは既定で /root へ退避) |
 | `mc-console` | tmux コンソールにアタッチ |
 | `mc-config` | ゲームプレイ設定8項目の編集 |
 | `mc-whitelist` | Java/Bedrock の whitelist 追加 + reload |
