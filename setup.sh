@@ -223,15 +223,22 @@ upsert_json() {  # upsert_json <file> <json-object>
 # wait_progress <監視対象ログ> <PID または 空> <完了マーカー正規表現>
 #   PID 指定時はそのプロセスが終わるまで、完了マーカー指定時はマッチするまで監視する。
 wait_progress() {
-  local logf="$1" pid="${2:-}" donm="${3:-}" start el prog hit=1
+  local logf="$1" pid="${2:-}" donm="${3:-}" start el prog hit=1 last_hb=0
   start="$(date +%s)"
   while :; do
     el=$(( $(date +%s) - start ))
     prog="$(grep -oE 'Preparing spawn area: [0-9]+%' "$logf" 2>/dev/null | tail -1)"
     printf '\r\033[K  \033[2m%s\033[0m  経過 %ds' "${prog:-起動処理中...}" "$el"
+    # \r 上書きが効かない環境 (ログへのリダイレクト等) でも進行が分かるよう、
+    # 30秒毎に改行付きの heartbeat 行を残す。
+    if [ $((el - last_hb)) -ge 30 ]; then
+      printf '\n'
+      log "${prog:-起動処理中...} (経過 ${el}s)"
+      last_hb=$el
+    fi
     if [ -n "$donm" ] && grep -q "$donm" "$logf" 2>/dev/null; then hit=0; break; fi
     if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then hit=0; break; fi
-    [ "$el" -ge 240 ] && { hit=1; break; }
+    [ "$el" -ge 590 ] && { hit=1; break; }
     sleep 2
   done
   printf '\r\033[K'

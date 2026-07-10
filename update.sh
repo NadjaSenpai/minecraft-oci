@@ -76,14 +76,21 @@ resolve_latest_paper_version() {  # -> stdout: 最新安定版のバージョン
 
 # 起動ログを監視し、ワールド生成の進捗と経過秒をライブ表示する。
 wait_progress() {  # wait_progress <log> <完了マーカー正規表現>
-  local logf="$1" donm="${2:-}" start el prog hit=1
+  local logf="$1" donm="${2:-}" start el prog hit=1 last_hb=0
   start="$(date +%s)"
   while :; do
     el=$(( $(date +%s) - start ))
     prog="$(grep -oE 'Preparing spawn area: [0-9]+%' "$logf" 2>/dev/null | tail -1)"
     printf '\r\033[K  \033[2m%s\033[0m  経過 %ds' "${prog:-起動処理中...}" "$el"
+    # \r 上書きが効かない環境 (ログへのリダイレクト等) でも進行が分かるよう、
+    # 30秒毎に改行付きの heartbeat 行を残す。
+    if [ $((el - last_hb)) -ge 30 ]; then
+      printf '\n'
+      log "${prog:-起動処理中...} (経過 ${el}s)"
+      last_hb=$el
+    fi
     if [ -n "$donm" ] && grep -q "$donm" "$logf" 2>/dev/null; then hit=0; break; fi
-    [ "$el" -ge 240 ] && { hit=1; break; }
+    [ "$el" -ge 590 ] && { hit=1; break; }
     sleep 2
   done
   printf '\r\033[K'
