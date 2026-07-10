@@ -38,9 +38,11 @@ sudo apt-get update && sudo apt-get install -y git \
 sudo ./dashboard/install.sh
 ```
 
-`setup.sh` の環境変数(抜粋): `MC_VERSION`(既定 26.1.2)/ `ADMIN_PLAYER` / `BEDROCK_PLAYER` /
-`MEMORY` / `JAVA_PORT`(25565)/ `BEDROCK_PORT`(19132)。ゲームプレイ設定(`MOTD`/`DIFFICULTY` 等)も
-初回構築時に対話 or 環境変数で投入でき、後から `mc-config` で変更します。
+`setup.sh` の環境変数(抜粋): `MC_VERSION`(既定 26.1.2。`latest` 指定で最新安定版を自動解決)/
+`ADMIN_PLAYER` / `BEDROCK_PLAYER` / `MEMORY` / `JAVA_PORT`(25565)/ `BEDROCK_PORT`(19132)/
+`AUTO_UPDATE`(既定 false。true で `update.sh` を毎日自動実行する systemd timer を有効化)。
+ゲームプレイ設定(`MOTD`/`DIFFICULTY` 等)も初回構築時に対話 or 環境変数で投入でき、後から
+`mc-config` で変更します。
 
 ## CLI ヘルパ(`/usr/local/bin` に自動配置)
 

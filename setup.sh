@@ -9,7 +9,8 @@
 # 環境変数で渡した項目は対話をスキップ (自動化・再実行・パイプ実行向け。例:
 #   sudo ADMIN_PLAYER=YourName ./setup.sh):
 #
-#   MC_VERSION    Minecraft バージョン            (既定: 26.1.2)
+#   MC_VERSION    Minecraft バージョン            (既定: 26.1.2。"latest" 指定で最新安定版を自動解決)
+#   AUTO_UPDATE   定期自動更新 (systemd timer)     (既定: false。true で有効化。MC_VERSION=latest 相当で毎日 update.sh を実行)
 #   ADMIN_PLAYER  whitelist + op する Java 名      (既定: 空 = 登録しない)
 #   BEDROCK_PLAYER whitelist + op する Bedrock 名   (既定: 空 = 登録しない)
 #                 Bedrock(統合版)のゲーマータグ。XUID から Floodgate UUID を計算して登録。
@@ -40,6 +41,7 @@ _MC_VERSION_SET="${MC_VERSION+x}"
 _ADMIN_SET="${ADMIN_PLAYER+x}"
 _BEDROCK_SET="${BEDROCK_PLAYER+x}"
 _MEMORY_SET="${MEMORY+x}"
+AUTO_UPDATE="${AUTO_UPDATE:-false}"
 
 # ゲームプレイ9項目: env で渡されたかを _SET フラグに記録 (デフォルト適用前に)。
 # これらは「未設定なら server.properties に書かない」方針 (Minecraft 既定に任せる)。
@@ -189,6 +191,23 @@ paper_meta() {  # paper_meta <url> -> JSON を stdout へ
   rm -f "$tmp"
 }
 
+# 全 MC バージョンを新しい順に調べ、latest build の channel が STABLE な最初の
+# バージョンを返す (rc/pre/alpha 等のプレリリース版名は事前に除外)。
+resolve_latest_paper_version() {  # -> stdout: 最新安定版のバージョン文字列
+  local versions_json v build_json channel
+  versions_json="$(paper_meta "https://fill.papermc.io/v3/projects/paper")" || return 1
+  while IFS= read -r v; do
+    case "$v" in *-*) continue ;; esac
+    build_json="$(paper_meta "https://fill.papermc.io/v3/projects/paper/versions/${v}/builds/latest" 2>/dev/null)" || continue
+    channel="$(printf '%s' "$build_json" | jq -r '.channel // empty')"
+    if [ "$channel" = "STABLE" ]; then
+      printf '%s' "$v"
+      return 0
+    fi
+  done < <(printf '%s' "$versions_json" | jq -r '.versions | to_entries[] | .value[]')
+  return 1
+}
+
 # JSON 配列ファイルにエントリを upsert (同じ uuid があれば置換、無ければ追加)。
 upsert_json() {  # upsert_json <file> <json-object>
   local file="$1" obj="$2" tmp; tmp="$(mktemp)"
@@ -321,6 +340,13 @@ apt-get update -qq
 log "導入: curl wget jq tmux ca-certificates gnupg iptables iptables-persistent netfilter-persistent"
 apt-get install -y curl wget jq tmux ca-certificates gnupg iptables iptables-persistent netfilter-persistent
 ok "依存パッケージ導入完了"
+
+if [ "$MC_VERSION" = "latest" ]; then
+  log "MC_VERSION=latest → PaperMC の最新安定版を解決..."
+  _resolved="$(resolve_latest_paper_version)" || die "最新バージョンの解決に失敗しました。MC_VERSION を明示してください。"
+  MC_VERSION="$_resolved"
+  ok "解決: MC_VERSION=$MC_VERSION"
+fi
 
 # ---------------------------------------------------------------------------
 # 3. Java (Eclipse Temurin) — MC バージョンが要求する版を fill API から自動選択
@@ -642,6 +668,41 @@ log "サーバーを起動 (systemctl restart ${SERVICE_NAME})..."
 systemctl restart "$SERVICE_NAME"
 ok "サービス起動を指示"
 
+# 定期自動更新 (AUTO_UPDATE=true のときのみ有効化。既定は無効)。
+# MC_VERSION=latest で毎日 update.sh を実行し、PaperMC の最新安定版に追従する。
+cat > "/etc/systemd/system/${SERVICE_NAME}-update.service" <<EOF
+[Unit]
+Description=Minecraft Server auto-update (Paper/plugins to latest stable)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=MC_VERSION=latest
+WorkingDirectory=${SCRIPT_DIR}
+ExecStart=${SCRIPT_DIR}/update.sh
+EOF
+cat > "/etc/systemd/system/${SERVICE_NAME}-update.timer" <<EOF
+[Unit]
+Description=Minecraft Server auto-update timer
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1800
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+if [ "$AUTO_UPDATE" = "true" ]; then
+  systemctl enable --now "${SERVICE_NAME}-update.timer" >/dev/null 2>&1 || true
+  ok "自動更新 timer を有効化 (毎日 + ランダム遅延30分、MC_VERSION=latest)"
+else
+  systemctl disable --now "${SERVICE_NAME}-update.timer" >/dev/null 2>&1 || true
+  log "自動更新 timer は無効 (AUTO_UPDATE=true で有効化: sudo systemctl enable --now ${SERVICE_NAME}-update.timer)"
+fi
+
 # ---------------------------------------------------------------------------
 # 11. 起動待ち & whitelist/op
 # ---------------------------------------------------------------------------
@@ -707,6 +768,10 @@ cat <<EOF
    sudo mc-console
 
  ログ: ${MC_DIR}/logs/latest.log
+
+ 自動更新 (Paper/プラグイン、毎日 MC_VERSION=latest で最新安定版に追従): $([ "$AUTO_UPDATE" = "true" ] && echo 有効 || echo 無効)
+   sudo systemctl enable --now ${SERVICE_NAME}-update.timer   # 有効化
+   sudo systemctl disable --now ${SERVICE_NAME}-update.timer  # 無効化
 
  【重要】OCI 側のポート開放が別途必要です
  OCI コンソール → ネットワーキング → VCN → サブネット → セキュリティリスト

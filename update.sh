@@ -7,8 +7,9 @@
 #
 # MC_VERSION を上書きすればマイナーバージョン更新も可能 (例):
 #   MC_VERSION=1.21.12 sudo -E ./update.sh
+#   MC_VERSION=latest  sudo -E ./update.sh   # PaperMC の最新安定版を自動解決
 #
-#   MC_VERSION  Minecraft バージョン (既定: /etc/default/minecraft の値)
+#   MC_VERSION  Minecraft バージョン (既定: /etc/default/minecraft の値。"latest" で最新安定版を自動解決)
 
 set -euo pipefail
 
@@ -56,6 +57,23 @@ paper_meta() {  # paper_meta <url> -> JSON を stdout へ
   rm -f "$tmp"
 }
 
+# 全 MC バージョンを新しい順に調べ、latest build の channel が STABLE な最初の
+# バージョンを返す (rc/pre/alpha 等のプレリリース版名は事前に除外)。
+resolve_latest_paper_version() {  # -> stdout: 最新安定版のバージョン文字列
+  local versions_json v build_json channel
+  versions_json="$(paper_meta "https://fill.papermc.io/v3/projects/paper")" || return 1
+  while IFS= read -r v; do
+    case "$v" in *-*) continue ;; esac
+    build_json="$(paper_meta "https://fill.papermc.io/v3/projects/paper/versions/${v}/builds/latest" 2>/dev/null)" || continue
+    channel="$(printf '%s' "$build_json" | jq -r '.channel // empty')"
+    if [ "$channel" = "STABLE" ]; then
+      printf '%s' "$v"
+      return 0
+    fi
+  done < <(printf '%s' "$versions_json" | jq -r '.versions | to_entries[] | .value[]')
+  return 1
+}
+
 # 起動ログを監視し、ワールド生成の進捗と経過秒をライブ表示する。
 wait_progress() {  # wait_progress <log> <完了マーカー正規表現>
   local logf="$1" donm="${2:-}" start el prog hit=1
@@ -79,6 +97,12 @@ step "サービスの停止"
 log "現在のワールドを保存して停止します..."
 systemctl stop "$SERVICE_NAME" || true
 ok "停止完了"
+
+if [ "$MC_VERSION" = "latest" ]; then
+  log "MC_VERSION=latest → PaperMC の最新安定版を解決..."
+  MC_VERSION="$(resolve_latest_paper_version)" || die "最新バージョンの解決に失敗しました。MC_VERSION を明示してください。"
+  ok "解決: MC_VERSION=$MC_VERSION"
+fi
 
 # ---------------------------------------------------------------------------
 # 2. Java の確認 (MC が要求する版を fill API から解決し、足りなければ導入)
