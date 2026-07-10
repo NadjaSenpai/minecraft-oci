@@ -519,6 +519,13 @@ set_prop() {
 }
 
 if [ ! -f "$GEYSER_CFG" ] || [ ! -f "$MC_DIR/server.properties" ]; then
+  # systemd 側 (minecraft.service) が既に有効化・起動済みだと、これから行う手動
+  # ブートストラップと同じ port/world を取り合って "Address already in use" /
+  # "session.lock: already locked" でクラッシュし合う。再実行時の事故を防ぐため
+  # 先に確実に止めておく (未導入・未起動なら no-op)。
+  systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+  pkill -9 -u "$MC_USER" -f 'paper.jar --nogui' 2>/dev/null || true
+
   # Phase 0-A: level-seed は world 生成時のみ有効 (生成後は world に焼き込まれ変更不可)。
   # Phase 0-B: Minecraft は server.properties の既存値を保持し欠落キーのみ既定で埋める。
   # → 初回 boot の前に server.properties を先行作成しておけば seed や生成時設定が確実に効く。
